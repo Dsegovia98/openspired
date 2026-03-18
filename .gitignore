@@ -1,0 +1,73 @@
+# ── Secrets ───────────────────────────────────────────────────
+.env
+*.env.local
+engine/.env
+
+# ── Workspace: runtime data (private, do not commit) ──────────
+# Template files in workspace/context/ ARE committed (they are
+# the boilerplate that new users need). Runtime data is excluded.
+
+# Keep template context files, exclude runtime-generated ones
+workspace/context/Contexto_Historico_Proyecto.md
+workspace/context/product_guide.md
+workspace/context/.meta_insights/*
+!workspace/context/.meta_insights/.gitkeep
+
+# Keep reasoning_bank templates, exclude generated entries
+# (the .md files are committed as empty templates; the pipeline appends to them)
+
+# Exclude per-module context (generated at runtime by Meta-Observer)
+workspace/modules/*
+!workspace/modules/.gitkeep
+
+# Exclude all ticket output
+workspace/tickets/*
+!workspace/tickets/.gitkeep
+
+# Exclude all logs and pipeline runs
+workspace/logs/*
+!workspace/logs/.gitkeep
+workspace/logs/pipeline_runs/*
+!workspace/logs/pipeline_runs/.gitkeep
+
+# ── Generated ticket output folders (created at runtime) ──────
+# The pipeline creates domain-specific folders based on DOMAIN_PRIMARY.
+# These are local artifacts — not meant to be in the engine repo.
+App/
+Analytics/
+Analitica/
+Cake/
+PRDs/
+Ideas/
+
+# ── Audit / internal session files ────────────────────────────
+Audit_*.md
+Auditoria_*.md
+Evaluacion_*.md
+*_Trace_Log.md
+DAI_Meeting_Brief.docx
+
+# ── Nested git repos ──────────────────────────────────────────
+dai/
+
+# ── Binary / office files ─────────────────────────────────────
+*.docx
+*.xlsx
+*.pptx
+
+# ── Python ────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# ── OS ────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
