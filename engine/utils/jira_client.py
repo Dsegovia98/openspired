@@ -186,6 +186,79 @@ class JiraClient:
             enriched.append(lnk)
         return enriched
 
+    def get_epic_children(self, epic_key: str, max_results: int = 8) -> list[dict]:
+        """
+        Retorna los issues hijos (siblings) de una épica.
+
+        Prueba dos estrategias en orden:
+          1. JQL: issue in childIssuesOf("{epic_key}")  — funciona en Jira moderno (NextGen)
+          2. JQL: "Epic Link" = "{epic_key}"            — funciona en proyectos clásicos
+
+        Cada resultado incluye: key, summary, status, issue_type.
+        Errores de red o JQL inválido se silencian — el contexto es best-effort.
+        """
+        epic_key = _normalize_key(epic_key)
+        strategies = [
+            f'issue in childIssuesOf("{epic_key}")',
+            f'"Epic Link" = "{epic_key}"',
+        ]
+        fields = "summary,status,issuetype"
+        for jql in strategies:
+            try:
+                import urllib.parse
+                path = f"search?jql={urllib.parse.quote(jql)}&fields={fields}&maxResults={max_results}"
+                data = self._request("GET", path, api_version=3)
+                issues = data.get("issues", [])
+                if issues:
+                    return [
+                        {
+                            "key":        i["key"],
+                            "summary":    i["fields"].get("summary", ""),
+                            "status":     i["fields"].get("status", {}).get("name", ""),
+                            "issue_type": i["fields"].get("issuetype", {}).get("name", ""),
+                        }
+                        for i in issues
+                    ]
+            except Exception:
+                continue
+        return []
+
+    def get_sprint_goal(self, project_key: str) -> dict:
+        """
+        Busca el sprint activo del proyecto y retorna su nombre y objetivo.
+
+        Usa la Jira Agile API (/rest/agile/1.0/).
+        Retorna {"name": ..., "goal": ...} o {} si no se puede obtener.
+
+        Nota: requiere permisos de lectura de boards (scope: read:jira-work).
+        """
+        try:
+            import urllib.parse
+            # Buscar boards del proyecto
+            path = f"board?projectKeyOrId={urllib.parse.quote(project_key)}&maxResults=5"
+            boards_data = self._request("GET", path, api_base="rest/agile", api_version="1.0")
+            boards = boards_data.get("values", [])
+            if not boards:
+                return {}
+
+            # Usar el primer board encontrado (normalmente el Scrum board)
+            board_id = boards[0]["id"]
+
+            # Buscar sprint activo en ese board
+            sprint_path = f"board/{board_id}/sprint?state=active&maxResults=1"
+            sprints_data = self._request("GET", sprint_path, api_base="rest/agile", api_version="1.0")
+            sprints = sprints_data.get("values", [])
+            if not sprints:
+                return {}
+
+            sprint = sprints[0]
+            return {
+                "name": sprint.get("name", ""),
+                "goal": sprint.get("goal", ""),
+            }
+        except Exception:
+            return {}
+
     def get_project_issue_types(self, project_key: str) -> list[dict]:
         """Lista los tipos de issue disponibles en un proyecto."""
         data = self._request("GET", f"project/{project_key}", api_version=3)
@@ -201,9 +274,10 @@ class JiraClient:
         method: str,
         path: str,
         payload: Optional[dict] = None,
-        api_version: int = 3,
+        api_version: "int | str" = 3,
+        api_base: str = "rest/api",
     ) -> dict:
-        url = f"{self._base}/rest/api/{api_version}/{path}"
+        url = f"{self._base}/{api_base}/{api_version}/{path}"
         data = json.dumps(payload).encode("utf-8") if payload else None
 
         req = urllib.request.Request(

@@ -6,7 +6,6 @@ from __future__ import annotations
 from datetime import datetime
 from dataclasses import dataclass, field
 from typing import Optional
-from config import PROJECT_ROOT
 
 
 @dataclass
@@ -31,12 +30,16 @@ class PipelineRun:
     module:      str      = ""
     ticket_type: str      = ""
     ticket_name: str      = ""
+    tags:         list[str] = field(default_factory=list)
     file_path:    str      = ""
     ticket_content: str   = ""
     steps:        list[AgentStep] = field(default_factory=list)
     revisions:   int      = 0
     po_score:    str      = "⚠️ Sin score"
     po_feedback: str      = ""
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    total_cost_usd: float = 0.0
     escalated:   bool     = False
     started_at:  datetime = field(default_factory=datetime.now)
     finished_at: Optional[datetime] = None
@@ -47,6 +50,16 @@ def generate_trace_log(run: PipelineRun) -> str:
     finished = run.finished_at or datetime.now()
     duration = (finished - run.started_at).total_seconds()
 
+    # Construir tabla de intervenciones del PO
+    if run.po_feedback.strip():
+        po_rows = [
+            f"| {i+1} | {line.strip()} |"
+            for i, line in enumerate(run.po_feedback.strip().splitlines())
+            if line.strip()
+        ]
+    else:
+        po_rows = ["| — | *Sin intervenciones del PO* |"]
+
     lines = [
         "---",
         f"Ticket_ID:   {run.ticket_id}",
@@ -55,13 +68,14 @@ def generate_trace_log(run: PipelineRun) -> str:
         f"Tipo:        {run.ticket_type}",
         f"Dominio:     {run.domain}",
         f"Módulo:      {run.module}",
-        f"Duración:    {duration:.0f}s",
+        f"Tags:        {', '.join(run.tags) if run.tags else '-'}",
+        f"Duracion:    {duration:.0f}s",
         "---",
         "",
         f"# TRACE LOG — {run.ticket_id}: {run.ticket_name}",
         "",
         "## 1. INPUT DEL PO",
-        "> Descripción original, sin editar.",
+        "> Descripcion original, sin editar.",
         "",
         run.po_input,
         "",
@@ -73,41 +87,48 @@ def generate_trace_log(run: PipelineRun) -> str:
 
     for step in run.steps:
         issues_str = "\n".join(f"  - {i}" for i in step.issues_found) or "  Ninguno"
+        token_summary = f"{step.input_tokens}/{step.output_tokens}" if (step.input_tokens or step.output_tokens) else "-"
         lines += [
             f"### {step.agent}",
             f"**Resumen:** {step.summary}",
             f"**Issues encontrados:**",
             issues_str,
-            f"**Duración:** {step.duration_secs:.1f}s",
+            f"**Tokens (input/output):** {token_summary}",
+            f"**Duracion:** {step.duration_secs:.1f}s",
             "",
         ]
 
     lines += [
         "---",
         "",
+        "## 2.1 COSTO Y TOKENS",
+        "",
+        f"**Tokens totales (input/output):** {run.total_input_tokens} / {run.total_output_tokens}",
+        f"**Costo estimado total (USD):** {run.total_cost_usd:.6f}",
+        "",
         "## 3. INTERVENCIONES DEL PO",
         "",
         f"**Revisiones internas (anti-loop):** {run.revisions} / 2",
-        f"**¿Escaló a [REQUIERE REVISIÓN HUMANA]?:** {'Sí ⚠️' if run.escalated else 'No ✅'}",
+        f"**Escalo a [REQUIERE REVISION HUMANA]:** {'Si' if run.escalated else 'No'}",
         "",
-        "| # | Momento | Qué corrigió | Tipo |",
-        "|---|---------|-------------|------|",
-        "| — | — | *Sin intervenciones registradas* | — |",
+        "| # | Feedback del PO |",
+        "|---|----------------|",
+        *po_rows,
         "",
         "---",
         "",
         "## 4. SCORE Y FEEDBACK PO",
         "",
         f"**Score:** {run.po_score}",
-        f"**Feedback:** {run.po_feedback or '(Pendiente de feedback del PO)'}",
+        f"**Feedback:** {run.po_feedback or '(Sin feedback del PO)'}",
         "",
         "---",
         "",
-        "## 5. EXTRACCIÓN PARA META-OBSERVADOR",
+        "## 5. EXTRACCION PARA META-OBSERVADOR",
         "",
-        "**¿Nuevo patrón exitoso?:** [Meta-Observador completará esto]",
-        "**¿Nuevo anti-patrón?:** [Meta-Observador completará esto]",
-        "**¿Hechos nuevos para Memory/?:** [Meta-Observador completará esto]",
+        "**Nuevo patron exitoso:** [Meta-Observador completara esto]",
+        "**Nuevo anti-patron:** [Meta-Observador completara esto]",
+        "**Hechos nuevos para Memory/:** [Meta-Observador completara esto]",
         "",
         f"**Ruta del ticket:** `{run.file_path}`",
     ]

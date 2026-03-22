@@ -14,7 +14,7 @@ import json
 import time
 import urllib.request
 import urllib.error
-from .base import LLMProvider
+from .base import LLMProvider, ProviderResponse, ProviderUsage
 
 _API_URL = "https://api.openai.com/v1/chat/completions"
 
@@ -33,7 +33,7 @@ class OpenAIProvider(LLMProvider):
     def name(self) -> str:
         return "openai"
 
-    def call(self, system_prompt: str, user_message: str, model: str, max_tokens: int) -> str:
+    def call(self, system_prompt: str, user_message: str, model: str, max_tokens: int) -> ProviderResponse:
         payload = json.dumps({
             "model":      model,
             "max_tokens": max_tokens,
@@ -57,7 +57,20 @@ class OpenAIProvider(LLMProvider):
                     choices = body.get("choices")
                     if not choices or not isinstance(choices, list):
                         raise RuntimeError(f"OpenAI API returned empty choices: {body}")
-                    return choices[0]["message"]["content"]
+                    usage_data = body.get("usage", {}) if isinstance(body.get("usage", {}), dict) else {}
+                    prompt_details = usage_data.get("prompt_tokens_details", {}) if isinstance(usage_data.get("prompt_tokens_details", {}), dict) else {}
+                    usage = ProviderUsage(
+                        input_tokens=int(usage_data.get("prompt_tokens", 0) or 0),
+                        output_tokens=int(usage_data.get("completion_tokens", 0) or 0),
+                        cache_read_input_tokens=int(prompt_details.get("cached_tokens", 0) or 0),
+                        raw=usage_data,
+                    )
+                    return ProviderResponse(
+                        text=choices[0]["message"]["content"],
+                        usage=usage,
+                        provider=self.name,
+                        model=model,
+                    )
 
             except urllib.error.HTTPError as e:
                 code     = e.code

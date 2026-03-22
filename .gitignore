@@ -12,6 +12,10 @@ workspace/context/Contexto_Historico_Proyecto.md
 workspace/context/product_guide.md
 workspace/context/.meta_insights/*
 !workspace/context/.meta_insights/.gitkeep
+# User-specific runtime files (generated during setup/use)
+workspace/context/preferences.md
+workspace/context/ticket_template.md
+workspace/context/interface_map.md
 
 # Keep reasoning_bank templates, exclude generated entries
 # (the .md files are committed as empty templates; the pipeline appends to them)
@@ -66,6 +70,12 @@ build/
 .venv/
 venv/
 env/
+
+# ── Desktop app build artifacts ───────────────────────────────
+desktop/node_modules/
+desktop/dist/
+desktop/src-tauri/target/
+*.dmg
 
 # ── OS ────────────────────────────────────────────────────────
 .DS_Store

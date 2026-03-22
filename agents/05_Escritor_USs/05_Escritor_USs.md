@@ -14,6 +14,9 @@
 - **Máximo 6 criterios de aceptación** por bloque. Consolida si hay más.
 - **Máximo 3 flujos críticos** en la sección CRITICAL FLOWS. No es una suite exhaustiva.
 - **REGLA DE CONTEXTO — ACs de delta, no de baseline:** Los criterios de aceptación describen solo el comportamiento NUEVO o MODIFICADO. No especifiques cómo funciona lo que ya existe en el módulo. Si el módulo tiene una tabla con filtros, no expliques cómo funciona la tabla — el AC empieza donde el cambio empieza. El lector (dev, QA) conoce el módulo base; tu trabajo es describirle el delta con precisión.
+- **REGLA DE ESPECIFICIDAD — Calibra según el contexto disponible:** Lee los flags `context_confidence` del YAML Manifest antes de redactar ACs.
+  - Si `has_screen_map: true` y `has_design: true` → puedes usar lenguaje específico sobre posicionamiento, componentes y nombres de UI (ej: "el usuario hace clic en el botón 'Guardar cambios' en la barra de acciones superior").
+  - Si `has_screen_map: false` O `has_design: false` → usa lenguaje **direccional**: describe la intención y el resultado esperado sin prescribir posición exacta de elementos (ej: "el usuario puede guardar los cambios mediante una acción explícita de confirmación"). Una especificación flexible con buen resultado observable vale más que una especificación posicional basada en suposiciones.
 - **Terminología del módulo:** Usa los nombres exactos de campos, acciones y secciones tal como aparecen en `App/Guia_Maestra_App.md` para el módulo correspondiente. Ejemplo: en Billing el botón de exportar se llama icono de descarga, el modal se llama "Configuration", el toggle se llama "Auto execution".
 ## Task Lifecycle:
 1. **Plan:** Lee el documento pre-US del Desarrollador de Concepto, identifica si es User Story o Design Task, y selecciona la plantilla correcta de `Skills/01_Skill_Traduccion_Jira_Markup.md`.

@@ -8,6 +8,7 @@
 - **OBLIGATORIO:** `workspace/context/global.md` — Reglas inmutables del proyecto.
 - **OBLIGATORIO:** `workspace/context/sprint_context.md` — Estado del sprint actual.
 - **CONSULTAR:** `App/Guia_Maestra_App.md` — Para identificar correctamente el módulo target (ej: "Billing", "Feature Flags", "Support/Cronjobs") e incluirlo en el campo `module` del YAML Manifest. Un módulo bien identificado permite a los agentes siguientes leer la sección correcta de la Guía.
+- **CONSULTAR:** `workspace/context/interface_map.md` — Mapa de pantallas del producto. Úsalo para identificar la pantalla específica donde vive el ticket (campo `screen` del YAML) y para llenar `context_confidence.has_screen_map`. Si la pantalla no aparece en el mapa, `screen: "none"` y `has_screen_map: false`.
 - **CONSULTAR:** `workspace/context/relationships.md` — Dependencias entre entidades.
 ## Guardrails:
 - Falla y pide ayuda al PO si el requerimiento inicial es demasiado ambiguo y carece de contexto de App o Analytics.

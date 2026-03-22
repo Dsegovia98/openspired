@@ -11,6 +11,7 @@ Uso:
 """
 from __future__ import annotations
 import sys
+import os
 import asyncio
 import argparse
 import textwrap
@@ -33,11 +34,16 @@ if _MISSING:
     print("   pip install", " ".join(_MISSING), "\n")
     sys.exit(1)
 
+# Bootstrap: permitir iniciar la API local sin API key previa para habilitar setup UI.
+if "--serve-api" in sys.argv:
+    os.environ.setdefault("OPENSPIRED_ALLOW_EMPTY_CONFIG", "true")
+
 # ─── Imports del sistema ──────────────────────────────────────────────────────
 try:
     from config import (
-        ANTHROPIC_API_KEY, GOOGLE_API_KEY, OPENAI_API_KEY, PROVIDER, MODEL, PROJECT_ROOT,
-        WORKSPACE_DIR, LOGS_DIR,
+        ANTHROPIC_API_KEY, GOOGLE_API_KEY, OPENAI_API_KEY, PROVIDER, MODEL,
+        PROJECT_ROOT, RUNTIME_PROJECT_ROOT, WORKSPACE_DIR, LOGS_DIR, AGENTS_DIR,
+        PROFILE_NAME, PROFILE_ROOT, PROFILE_SOURCE,
         JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN, JIRA_ENABLED,
     )
 except EnvironmentError as e:
@@ -63,14 +69,15 @@ def print_header() -> None:
             "[bold bright_cyan]Openspired[/bold bright_cyan]  "
             "[dim]Sistema Multi-Agente — Pipeline de Generación de Tickets[/dim]\n\n"
             f"[dim]Modelo:[/dim] [cyan]{MODEL}[/cyan]   "
-            f"[dim]Proyecto:[/dim] [cyan]{PROJECT_ROOT.name}[/cyan]",
+            f"[dim]Proyecto:[/dim] [cyan]{RUNTIME_PROJECT_ROOT.name}[/cyan]   "
+            f"[dim]Profile:[/dim] [cyan]{PROFILE_NAME}[/cyan]",
             border_style="bright_cyan",
             padding=(0, 2),
         ))
         console.print()
     else:
         print("\n Openspired — Pipeline Multi-Agente")
-        print(f"   Modelo: {MODEL} | Proyecto: {PROJECT_ROOT.name}\n")
+        print(f"   Modelo: {MODEL} | Proyecto: {RUNTIME_PROJECT_ROOT.name} | Profile: {PROFILE_NAME}\n")
 
 
 def print_check() -> None:
@@ -83,7 +90,9 @@ def print_check() -> None:
         ("Context/global",  (WORKSPACE_DIR / "context/global.md").exists(), "✓"),
         ("ReasoningBank",   (WORKSPACE_DIR / "context/.reasoning_bank").exists(), "✓"),
         ("Logs dir",        LOGS_DIR.exists(), "✓"),
-        ("Agents dir",      (PROJECT_ROOT / "agents").exists(), "✓"),
+        ("Agents dir",      AGENTS_DIR.exists(), str(AGENTS_DIR)),
+        ("Profile",         True, f"{PROFILE_NAME} ({PROFILE_SOURCE})"),
+        ("Profile root",    PROFILE_ROOT.exists(), str(PROFILE_ROOT)),
         ("Jira",            True, "✓ Configurada" if JIRA_ENABLED else "⚠ No configurada (opcional)"),
     ]
 
@@ -280,14 +289,34 @@ def _run_jira_mode(issue_ref: str, review_callback=None) -> None:
         for lnk in linked:
             print(f"     • [{lnk['relation']}] {lnk['key']} ({lnk['type']}) — {lnk['summary']} [{lnk['status']}]")
     if comments:  print(f"   Comentarios recientes: {len(comments)}")
+
+    # ── 1b. Epic siblings + sprint goal (contexto adicional desde Jira) ────────
+    epic_siblings: list[dict] = []
+    sprint_info:   dict       = {}
+
+    if epic_k:
+        print(f"   🔍 Buscando siblings en épica {epic_k}...")
+        try:
+            siblings_raw = jira.get_epic_children(epic_k, max_results=8)
+            # Excluir el propio issue del resultado
+            epic_siblings = [s for s in siblings_raw if s["key"] != issue["key"]]
+            if epic_siblings:
+                print(f"   ✓ Siblings encontrados: {len(epic_siblings)}")
+        except Exception:
+            pass  # best-effort
+
+    print(f"   🔍 Buscando sprint activo de {issue['project_key']}...")
+    try:
+        sprint_info = jira.get_sprint_goal(issue["project_key"])
+        if sprint_info.get("name"):
+            print(f"   ✓ Sprint: {sprint_info['name']}")
+        else:
+            print(f"   — Sprint activo no encontrado (el board puede ser Kanban o sin permisos de Agile API)")
+    except Exception:
+        pass  # best-effort
     print()
 
     # ── 2. Construir el input para el pipeline ─────────────────────────────────
-    # Incluimos todo el contexto disponible del issue: descripción, labels,
-    # componentes, épica/parent, issues vinculadas y comentarios recientes.
-    # Esto da a los agentes (especialmente al Orquestador) contexto suficiente
-    # para clasificar el módulo correctamente sin depender solo del título.
-
     meta_lines = []
     if labels:   meta_lines.append(f"Labels: {', '.join(labels)}")
     if comps:    meta_lines.append(f"Componentes: {', '.join(comps)}")
@@ -303,11 +332,33 @@ def _run_jira_mode(issue_ref: str, review_callback=None) -> None:
             lines.append(header)
             desc = lnk.get("description", "").strip()
             if desc:
-                # Indent description so agents read it as sub-content of this linked issue
-                for dline in desc.split("\n")[:20]:  # cap at 20 lines per linked issue
+                for dline in desc.split("\n")[:20]:
                     if dline.strip():
                         lines.append(f"    {dline}")
         linked_section = "\n\nIncidencias vinculadas (con descripción completa):\n" + "\n".join(lines)
+
+    # Epic siblings: otros tickets en la misma épica — contexto de qué ya se construyó
+    siblings_section = ""
+    if epic_siblings:
+        lines = [
+            f"  {s['key']} ({s['issue_type']}) [{s['status']}] — {s['summary']}"
+            for s in epic_siblings
+        ]
+        siblings_section = (
+            f"\n\nOtros tickets de la misma épica ({epic_k} — {epic_s}):\n"
+            + "\n".join(lines)
+            + "\n(Usa esta lista para evitar duplicados, identificar dependencias y entender "
+              "el alcance ya construido de la épica.)"
+        )
+
+    # Sprint goal: objetivo del sprint activo — ancla el ticket al contexto del equipo
+    sprint_section = ""
+    if sprint_info.get("goal"):
+        sprint_section = (
+            f"\n\nSprint activo: {sprint_info.get('name', '')}\n"
+            f"Objetivo del sprint: {sprint_info['goal']}\n"
+            f"(Verifica que este ticket sea coherente con el objetivo del sprint actual.)"
+        )
 
     comments_section = ""
     if comments:
@@ -321,6 +372,8 @@ def _run_jira_mode(issue_ref: str, review_callback=None) -> None:
         f"Proyecto: {issue['project_key']}\n"
         f"{meta_section}\n\n"
         f"Descripción del issue:\n{issue['description'] or '(Sin descripción)'}"
+        f"{sprint_section}"
+        f"{siblings_section}"
         f"{linked_section}"
         f"{comments_section}"
     )
@@ -398,9 +451,26 @@ def main() -> None:
         help="Lee el input desde un issue de Jira y escribe el resultado de vuelta. "
              "Acepta clave (CAKE-123) o URL completa.",
     )
+    parser.add_argument(
+        "--serve-api",
+        action="store_true",
+        help="Levanta la API local para desktop/UI en 127.0.0.1:8765",
+    )
     args = parser.parse_args()
 
     print_header()
+
+    if args.serve_api:
+        try:
+            import uvicorn
+            from api_server import app
+        except ImportError as e:
+            print(f"\n⛔  Dependencia faltante para API local: {e}")
+            print("   Instala: pip install fastapi uvicorn\n")
+            sys.exit(1)
+        print("🚀 Iniciando API local en http://127.0.0.1:8765 ...")
+        uvicorn.run(app, host="127.0.0.1", port=8765, reload=False)
+        return
 
     if args.check:
         print_check()
@@ -408,7 +478,7 @@ def main() -> None:
 
     # ── Modo Jira ──────────────────────────────────────────────────────────────
     if args.jira:
-        _run_jira_mode(args.jira)
+        _run_jira_mode(args.jira, review_callback=_make_review_callback())
         return
 
     # ── Modo normal ────────────────────────────────────────────────────────────

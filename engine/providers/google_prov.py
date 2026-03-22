@@ -15,7 +15,7 @@ import json
 import time
 import urllib.request
 import urllib.error
-from .base import LLMProvider
+from .base import LLMProvider, ProviderResponse, ProviderUsage
 
 # Reintentos ante errores transitorios (503 overload, 429 rate limit)
 _RETRYABLE_CODES = {429, 500, 503, 504}
@@ -41,12 +41,12 @@ class GoogleProvider(LLMProvider):
     def name(self) -> str:
         return "google"
 
-    def call(self, system_prompt: str, user_message: str, model: str, max_tokens: int) -> str:
+    def call(self, system_prompt: str, user_message: str, model: str, max_tokens: int) -> ProviderResponse:
         return self._call_with_fallback(system_prompt, user_message, model, max_tokens)
 
     def _call_with_fallback(
         self, system_prompt: str, user_message: str, model: str, max_tokens: int
-    ) -> str:
+    ) -> ProviderResponse:
         """Intenta con el modelo principal; si se agota con 503/429, usa el fallback."""
         try:
             return self._call_model(system_prompt, user_message, model, max_tokens)
@@ -58,7 +58,7 @@ class GoogleProvider(LLMProvider):
 
     def _call_model(
         self, system_prompt: str, user_message: str, model: str, max_tokens: int
-    ) -> str:
+    ) -> ProviderResponse:
         url = f"{_BASE_URL}/{model}:generateContent?key={self._api_key}"
 
         payload = json.dumps({
@@ -87,7 +87,18 @@ class GoogleProvider(LLMProvider):
                     candidates = body.get("candidates")
                     if not candidates or not isinstance(candidates, list):
                         raise RuntimeError(f"Google API returned no candidates: {body}")
-                    return candidates[0]["content"]["parts"][0]["text"]
+                    usage_data = body.get("usageMetadata", {}) if isinstance(body.get("usageMetadata", {}), dict) else {}
+                    usage = ProviderUsage(
+                        input_tokens=int(usage_data.get("promptTokenCount", 0) or 0),
+                        output_tokens=int(usage_data.get("candidatesTokenCount", 0) or 0),
+                        raw=usage_data,
+                    )
+                    return ProviderResponse(
+                        text=candidates[0]["content"]["parts"][0]["text"],
+                        usage=usage,
+                        provider=self.name,
+                        model=model,
+                    )
 
             except urllib.error.HTTPError as e:
                 code      = e.code

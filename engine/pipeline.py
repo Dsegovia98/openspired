@@ -14,17 +14,21 @@ import re
 import yaml
 from datetime import datetime
 from pathlib import Path
+from typing import Any, Callable
 
 from config import (
-    PROJECT_ROOT, MAX_REVISIONS,
+    RUNTIME_PROJECT_ROOT, MAX_REVISIONS, PROVIDER,
     DOMAIN_PRIMARY, DOMAIN_SECONDARY,
     JIRA_PROJECT_KEY, JIRA_PROJECT_KEY_SECONDARY,
 )
 from context.builder import build_system_prompt
-from agents.base import run_agent, run_agent_async
+from agents.base import run_agent, run_agent_async, run_agent_with_usage, run_agent_async_with_usage
 from utils.file_io import save_handoff, load_handoff, save_final_ticket
 from utils.trace_log import PipelineRun, AgentStep, save_trace_log
-from utils.registro import next_ticket_id, register_ticket
+from utils.registro import allocate_ticket_id, register_ticket
+from utils.artifacts_index import upsert_ticket_metadata
+from utils.costs import estimate_cost_usd
+from providers.base import ProviderResponse
 from utils.display import (
     print_banner, print_step_start, print_step_done,
     print_parallel_start, print_revision, print_escalation, print_success,
@@ -44,18 +48,23 @@ REQUERIMIENTO DEL PO:
 
 Tu tarea:
 1. Clasifica este requerimiento: dominio ({DOMAIN_PRIMARY} | {DOMAIN_SECONDARY}), tipo (User Story | Design Task), scope (Global | Local), módulo.
-2. Genera el Manifiesto de Slice en formato YAML con exactamente estos campos:
+2. Consulta la sección INTERFACE MAP en tu contexto (si está disponible) para identificar la pantalla exacta donde vive este ticket.
+3. Genera el Manifiesto de Slice en formato YAML con exactamente estos campos:
 
 ```yaml
 domain: "{DOMAIN_PRIMARY} | {DOMAIN_SECONDARY}"
 ticket_type: "User Story | Design Task"
 scope: "Global | Local"  # solo para {DOMAIN_PRIMARY}
 module: "NombreModulo"
+screen: "NombrePantalla | none"  # pantalla identificada en el INTERFACE MAP, o "none" si no aplica o no se encontró
 project_name: "Nombre descriptivo del ticket"
 priority: "Alta | Media | Baja"
 has_figma: true | false
 jira_project_key: "{jira_key_primary} | {jira_key_secondary}"
 rationale: "1-2 líneas explicando la clasificación"
+context_confidence:
+  has_design: true | false      # ¿El input menciona Figma, mockups o capturas visuales?
+  has_screen_map: true | false  # ¿Se encontró la pantalla en el INTERFACE MAP?
 ```
 
 REGLA CRÍTICA — [[BLOCKED_BY]] solo en estos casos CONCRETOS:
@@ -85,14 +94,22 @@ Tu tarea:
 4. Produce tu documento de análisis en formato markdown limpio. No escribas el ticket final — solo el análisis conceptual."""
 
 
-def _researcher_prompt(manifest_yaml: str) -> str:
+def _researcher_prompt(manifest_yaml: str, module_has_context: bool = True) -> str:
+    bootstrap_note = "" if module_has_context else f"""
+⚠️  MÓDULO SIN CONTEXTO PREVIO — ACTIVAR SKILL DE BOOTSTRAP:
+El módulo "{_extract_field(manifest_yaml, 'module')}" no tiene context.md en el workspace.
+Si Jira está configurado, activa tu Skill de Bootstrap de Módulo (02_Skill_Bootstrap_Modulo):
+busca en Jira los tickets históricos de este módulo para construir contexto antes de continuar.
+Si Jira no está disponible, documenta explícitamente que el módulo es nuevo y procede con lo que
+encuentres en product_knowledge.md y global.md. El Meta-Observador creará context.md al final.
+"""
     return f"""Eres el Researcher del sistema multi-agente.
 
 MANIFIESTO DEL SLICE:
 ```yaml
 {manifest_yaml}
 ```
-
+{bootstrap_note}
 Tu tarea:
 1. Investiga el contexto del módulo "{_extract_field(manifest_yaml, 'module')}" en el conocimiento del producto disponible.
 2. Identifica tickets previos relacionados en el historial (si los hay) y patrones aplicables del ReasoningBank.
@@ -328,12 +345,72 @@ def _extract_ticket_after_marker(text: str, markers: list[str]) -> str:
     return text.strip()
 
 
+def _emit_event(event_callback: "Callable[[dict[str, Any]], None] | None", event_type: str, **payload: Any) -> None:
+    """Best-effort event emitter used by API/desktop integrations."""
+    if not event_callback:
+        return
+    try:
+        event_callback({"type": event_type, **payload})
+    except Exception:
+        # Los eventos nunca deben romper la generación del ticket.
+        pass
+
+
+def _normalize_tags(raw_tags: list[str] | None) -> list[str]:
+    if not raw_tags:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for tag in raw_tags:
+        cleaned = re.sub(r"[^a-z0-9:_./-]+", "-", (tag or "").strip().lower()).strip("-")
+        if not cleaned:
+            continue
+        if cleaned in seen:
+            continue
+        seen.add(cleaned)
+        out.append(cleaned)
+    return out
+
+
+def _default_tags_for_run(run: PipelineRun, jira_issue_key: str | None = None) -> list[str]:
+    base = [
+        f"domain:{(run.domain or 'unknown').strip().lower()}",
+        f"type:{(run.ticket_type or 'unknown').strip().lower().replace(' ', '-')}",
+        f"module:{(run.module or 'unknown').strip().lower().replace(' ', '-')}",
+    ]
+    if run.scope:
+        base.append(f"scope:{run.scope.strip().lower()}")
+    if jira_issue_key:
+        base.append(f"jira:{jira_issue_key.strip().upper()}")
+    return _normalize_tags(base)
+
+
+def _record_usage(run: PipelineRun, step: AgentStep, response: ProviderResponse) -> None:
+    usage = response.usage
+    in_tokens = int(usage.input_tokens or 0)
+    out_tokens = int(usage.output_tokens or 0)
+    step.input_tokens += in_tokens
+    step.output_tokens += out_tokens
+    run.total_input_tokens += in_tokens
+    run.total_output_tokens += out_tokens
+    run.total_cost_usd += estimate_cost_usd(
+        response.provider or PROVIDER,
+        response.model,
+        input_tokens=in_tokens,
+        output_tokens=out_tokens,
+        cache_read_input_tokens=int(usage.cache_read_input_tokens or 0),
+        cache_creation_input_tokens=int(usage.cache_creation_input_tokens or 0),
+    )
+
+
 # ─── Pipeline Principal ───────────────────────────────────────────────────────
 
 async def run_pipeline(
     po_input:              str,
     jira_issue_key:        str | None = None,
     human_review_callback: "Callable[[str, str, str], str | None] | None" = None,
+    event_callback:        "Callable[[dict[str, Any]], None] | None" = None,
+    ticket_tags:           list[str] | None = None,
 ) -> PipelineRun:
     """
     Ejecuta el pipeline completo de generación de tickets.
@@ -352,14 +429,17 @@ async def run_pipeline(
     run = PipelineRun(run_id=run_id, ticket_id="PENDING", po_input=po_input)
 
     print_banner(po_input)
+    _emit_event(event_callback, "pipeline_started", po_input=po_input, jira_issue_key=jira_issue_key or "")
 
     # ── PASO 1: ORQUESTADOR ───────────────────────────────────────────────────
     print_step_start(1, "orquestador", "Triaje y clasificación")
+    _emit_event(event_callback, "step_started", step=1, agent="orquestador", description="Triaje y clasificación")
     t0 = time.time()
 
     step1_prompt = _orquestador_prompt(po_input)
     step1_sys    = build_system_prompt("orquestador")
-    step1_raw    = run_agent("orquestador", step1_sys, step1_prompt)
+    step1_resp   = run_agent_with_usage("orquestador", step1_sys, step1_prompt)
+    step1_raw    = step1_resp.text
 
     # Verificar si el Orquestador bloqueó por falta de insumos
     if "[[BLOCKED_BY:" in step1_raw:
@@ -377,7 +457,6 @@ async def run_pipeline(
             "⛔ El Orquestador no generó un YAML Manifest válido.\n"
             "Verifica que el modelo esté disponible y que el requerimiento sea clasificable."
         )
-    save_handoff(run_id, "01_manifest", manifest_yaml)
 
     # Poblar metadata del run
     run.domain      = _extract_field(manifest_yaml, "domain")
@@ -385,55 +464,102 @@ async def run_pipeline(
     run.module      = _extract_field(manifest_yaml, "module")
     run.ticket_type = _extract_field(manifest_yaml, "ticket_type")
     run.ticket_name = _extract_field(manifest_yaml, "project_name")
-    run.ticket_id   = next_ticket_id(run.ticket_type, run.domain)
-    run.steps.append(AgentStep("orquestador", summary=f"{run.domain} | {run.ticket_type} | {run.module}",
-                               duration_secs=time.time()-t0))
-    print_step_done("orquestador", time.time()-t0)
+    run.ticket_id   = allocate_ticket_id(run.ticket_type, run.domain)
+    run.tags        = _normalize_tags((ticket_tags or []) + _default_tags_for_run(run, jira_issue_key))
+
+    # ── Augmentar manifest con flags de contexto calculados por el pipeline ────
+    # (no dependen del LLM — son facts del filesystem y de Jira)
+    from context.builder import _module_context as _mc
+    module_has_context = bool(_mc(run.module))
+    manifest_yaml += (
+        f"\n# Pipeline-computed context flags:\n"
+        f"has_module_history: {'true' if module_has_context else 'false'}\n"
+    )
+
+    save_handoff(run_id, "01_manifest", manifest_yaml)
+    step1 = AgentStep(
+        "orquestador",
+        summary=f"{run.domain} | {run.ticket_type} | {run.module}",
+        duration_secs=time.time()-t0,
+    )
+    _record_usage(run, step1, step1_resp)
+    run.steps.append(step1)
+    elapsed_step1 = time.time() - t0
+    print_step_done("orquestador", elapsed_step1)
+    _emit_event(event_callback, "step_completed", step=1, agent="orquestador", duration_secs=elapsed_step1)
 
     # ── PASO 2: IDEADOR + RESEARCHER (PARALELO) ───────────────────────────────
     print_parallel_start(["ideador", "researcher"])
+    _emit_event(event_callback, "parallel_started", agents=["ideador", "researcher"])
     t1 = time.time()
 
     ideador_sys    = build_system_prompt("ideador")
     researcher_sys = build_system_prompt("researcher")
 
-    ideador_doc, researcher_doc = await asyncio.gather(
-        run_agent_async("ideador",    ideador_sys,    _ideador_prompt(manifest_yaml)),
-        run_agent_async("researcher", researcher_sys, _researcher_prompt(manifest_yaml)),
+    ideador_resp, researcher_resp = await asyncio.gather(
+        run_agent_async_with_usage("ideador",    ideador_sys,    _ideador_prompt(manifest_yaml)),
+        run_agent_async_with_usage("researcher", researcher_sys, _researcher_prompt(manifest_yaml, module_has_context)),
     )
+    ideador_doc = ideador_resp.text
+    researcher_doc = researcher_resp.text
 
     save_handoff(run_id, "02_ideador_doc",    ideador_doc)
     save_handoff(run_id, "03_researcher_doc", researcher_doc)
     elapsed = time.time() - t1
-    run.steps.append(AgentStep("ideador + researcher (paralelo)", duration_secs=elapsed,
-                               summary="Análisis conceptual + contexto histórico"))
+    step2 = AgentStep(
+        "ideador + researcher (paralelo)",
+        duration_secs=elapsed,
+        summary="Análisis conceptual + contexto histórico",
+    )
+    _record_usage(run, step2, ideador_resp)
+    _record_usage(run, step2, researcher_resp)
+    run.steps.append(step2)
     print_step_done("ideador", elapsed)
+    _emit_event(event_callback, "parallel_completed", agents=["ideador", "researcher"], duration_secs=elapsed)
 
     # ── PASO 3: DESARROLLADOR DE CONCEPTO ─────────────────────────────────────
     print_step_start(3, "dev_concepto", "Arquitectura conceptual y edge cases")
+    _emit_event(event_callback, "step_started", step=3, agent="dev_concepto", description="Arquitectura conceptual y edge cases")
     t2 = time.time()
 
     dev_sys     = build_system_prompt("dev_concepto", module=run.module)
-    concepto_doc = run_agent(
+    concepto_resp = run_agent_with_usage(
         "dev_concepto", dev_sys,
         _dev_concepto_prompt(manifest_yaml, ideador_doc, researcher_doc)
     )
+    concepto_doc = concepto_resp.text
     save_handoff(run_id, "04_concepto_doc", concepto_doc)
-    run.steps.append(AgentStep("dev_concepto", duration_secs=time.time()-t2,
-                               summary="Arquitectura, roles, edge cases, estados"))
-    print_step_done("dev_concepto", time.time()-t2)
+    step3 = AgentStep(
+        "dev_concepto",
+        duration_secs=time.time()-t2,
+        summary="Arquitectura, roles, edge cases, estados",
+    )
+    _record_usage(run, step3, concepto_resp)
+    run.steps.append(step3)
+    elapsed_step3 = time.time() - t2
+    print_step_done("dev_concepto", elapsed_step3)
+    _emit_event(event_callback, "step_completed", step=3, agent="dev_concepto", duration_secs=elapsed_step3)
 
     # ── PASO 4: ESCRITOR (primera generación) ─────────────────────────────────
     print_step_start(4, "escritor", "Redacción del ticket bilingüe")
+    _emit_event(event_callback, "step_started", step=4, agent="escritor", description="Redacción del ticket bilingüe")
     t3 = time.time()
 
     escritor_sys  = build_system_prompt("escritor", module=run.module)
-    ticket_draft  = run_agent("escritor", escritor_sys,
-                              _escritor_prompt(manifest_yaml, concepto_doc))
+    ticket_v1_resp = run_agent_with_usage(
+        "escritor",
+        escritor_sys,
+        _escritor_prompt(manifest_yaml, concepto_doc),
+    )
+    ticket_draft  = ticket_v1_resp.text
     save_handoff(run_id, "05_ticket_v1", ticket_draft)
-    run.steps.append(AgentStep("escritor", duration_secs=time.time()-t3,
-                               summary="Ticket bilingüe v1 generado"))
-    print_step_done("escritor", time.time()-t3)
+    step4 = AgentStep("escritor", duration_secs=time.time()-t3,
+                      summary="Ticket bilingüe v1 generado")
+    _record_usage(run, step4, ticket_v1_resp)
+    run.steps.append(step4)
+    elapsed_step4 = time.time() - t3
+    print_step_done("escritor", elapsed_step4)
+    _emit_event(event_callback, "step_completed", step=4, agent="escritor", duration_secs=elapsed_step4)
 
     # ── PASO 5: QA + FEEDBACK — LOOP ANTI-BUCLE (máx MAX_REVISIONS) ──────────
     qa_sys       = build_system_prompt("qa",       module=run.module)
@@ -442,14 +568,17 @@ async def run_pipeline(
 
     for revision in range(1, MAX_REVISIONS + 1):
         print_parallel_start(["qa", "feedback"])
+        _emit_event(event_callback, "parallel_started", agents=["qa", "feedback"], revision=revision)
         t4 = time.time()
 
-        qa_out, feedback_out = await asyncio.gather(
-            run_agent_async("qa",       qa_sys,
-                            _qa_prompt(final_ticket, concepto_doc, run.ticket_type)),
-            run_agent_async("feedback", feedback_sys,
-                            _feedback_prompt(final_ticket, revision)),
+        qa_resp, feedback_resp = await asyncio.gather(
+            run_agent_async_with_usage("qa",       qa_sys,
+                                       _qa_prompt(final_ticket, concepto_doc, run.ticket_type)),
+            run_agent_async_with_usage("feedback", feedback_sys,
+                                       _feedback_prompt(final_ticket, revision)),
         )
+        qa_out = qa_resp.text
+        feedback_out = feedback_resp.text
 
         qa_pass       = _has_pass(qa_out,       "QA_PASS")
         feedback_pass = _has_pass(feedback_out, "FEEDBACK_PASS")
@@ -458,24 +587,29 @@ async def run_pipeline(
         all_issues    = qa_issues + fb_issues
 
         elapsed = time.time() - t4
-        run.steps.append(AgentStep(
+        step5 = AgentStep(
             f"qa+feedback revision {revision}",
             duration_secs=elapsed,
             issues_found=all_issues,
             summary=f"{'PASS ✅' if (qa_pass and feedback_pass) else f'ISSUES: {len(all_issues)}'}"
-        ))
+        )
+        _record_usage(run, step5, qa_resp)
+        _record_usage(run, step5, feedback_resp)
+        run.steps.append(step5)
         run.revisions = revision
 
         if qa_pass and feedback_pass:
             # Usar el ticket del QA output (puede tener mejoras inyectadas)
             final_ticket = _extract_ticket_after_marker(qa_out, ["QA_PASS"])
             print_step_done("qa+feedback", elapsed)
+            _emit_event(event_callback, "parallel_completed", agents=["qa", "feedback"], revision=revision, duration_secs=elapsed, status="pass")
             break
 
         if revision == MAX_REVISIONS:
             # Anti-loop: escalar al PO
             run.escalated = True
             print_escalation(run.ticket_id)
+            _emit_event(event_callback, "qa_feedback_escalated", revision=revision, qa_issues=qa_issues, feedback_issues=fb_issues)
             final_ticket += "\n\n[REQUIERE REVISIÓN HUMANA]\n"
             final_ticket += f"QA Issues: {'; '.join(qa_issues)}\n"
             final_ticket += f"Feedback Issues: {'; '.join(fb_issues)}\n"
@@ -483,17 +617,27 @@ async def run_pipeline(
 
         # Hay issues y todavía hay iteraciones disponibles → revisión
         print_revision(revision, all_issues)
+        _emit_event(event_callback, "qa_feedback_revision", revision=revision, issues=all_issues)
         combined_feedback = f"QA:\n{qa_out}\n\nFEEDBACK:\n{feedback_out}"
         print_step_start(4, "escritor", f"Revisión {revision}")
+        _emit_event(event_callback, "step_started", step=4, agent="escritor", description=f"Revisión {revision}")
         t5 = time.time()
-        final_ticket = run_agent(
+        revision_resp = run_agent_with_usage(
             "escritor", escritor_sys,
             _escritor_prompt(manifest_yaml, concepto_doc, qa_feedback=combined_feedback)
         )
+        final_ticket = revision_resp.text
         save_handoff(run_id, f"05_ticket_v{revision+1}", final_ticket)
-        run.steps.append(AgentStep("escritor (revisión)", duration_secs=time.time()-t5,
-                                   summary=f"Revisión {revision} aplicada"))
-        print_step_done("escritor", time.time()-t5)
+        step5_writer = AgentStep(
+            "escritor (revisión)",
+            duration_secs=time.time()-t5,
+            summary=f"Revisión {revision} aplicada",
+        )
+        _record_usage(run, step5_writer, revision_resp)
+        run.steps.append(step5_writer)
+        elapsed_rev = time.time() - t5
+        print_step_done("escritor", elapsed_rev)
+        _emit_event(event_callback, "step_completed", step=4, agent="escritor", duration_secs=elapsed_rev, revision=revision)
 
     # Guardar el contenido final del ticket (usado por modo Jira)
     run.ticket_content = final_ticket
@@ -509,15 +653,18 @@ async def run_pipeline(
     if human_review_callback:
         po_iteration = 0
         while True:
+            _emit_event(event_callback, "human_review_waiting", ticket_type=run.ticket_type, module=run.module, iteration=po_iteration)
             human_feedback = human_review_callback(
                 final_ticket, run.ticket_type, run.module, revision=po_iteration
             )
             if not human_feedback or not human_feedback.strip():
                 # PO aprobó — salir del loop
+                _emit_event(event_callback, "human_review_approved", iteration=po_iteration)
                 break
 
             po_iteration += 1
             print_step_start(5, "escritor", f"Aplicando feedback del PO (v{po_iteration})")
+            _emit_event(event_callback, "human_review_feedback", iteration=po_iteration, feedback=human_feedback)
             t_human = time.time()
 
             # Persistir feedback → los agentes aprenden preferencias del PO
@@ -534,23 +681,29 @@ async def run_pipeline(
                 pass  # best-effort
 
             # Revisar quirúrgicamente — el Escritor edita el draft actual, no regenera
-            revised = run_agent(
+            revised_resp = run_agent_with_usage(
                 "escritor", escritor_sys,
                 _human_revision_prompt(final_ticket, human_feedback),
             )
-            final_ticket = revised
+            final_ticket = revised_resp.text
             run.ticket_content = final_ticket
             save_handoff(run_id, f"05_ticket_human_v{po_iteration}", final_ticket)
-            run.steps.append(AgentStep(
+            step_human = AgentStep(
                 f"escritor (human revision v{po_iteration})",
                 duration_secs=time.time()-t_human,
                 summary=f"PO feedback v{po_iteration} applied",
-            ))
-            print_step_done("escritor (revisión PO)", time.time()-t_human)
+            )
+            _record_usage(run, step_human, revised_resp)
+            run.steps.append(step_human)
+            run.po_feedback += f"\nv{po_iteration}: {human_feedback}"
+            elapsed_human = time.time() - t_human
+            print_step_done("escritor (revisión PO)", elapsed_human)
+            _emit_event(event_callback, "human_review_feedback_applied", iteration=po_iteration, duration_secs=elapsed_human)
             # Loop → el callback volverá a mostrar el ticket revisado al PO
 
     # ── PASO 6: DOCUMENTADOR ──────────────────────────────────────────────────
     print_step_start(6, "documentador", "Guardando ticket y actualizando registro")
+    _emit_event(event_callback, "step_started", step=6, agent="documentador", description="Guardando ticket y actualizando registro")
     t6 = time.time()
 
     ticket_path = save_final_ticket(
@@ -560,8 +713,15 @@ async def run_pipeline(
         module=run.module,
         ticket_type=run.ticket_type,
         content=final_ticket,
+        tags=run.tags,
+        run_id=run.run_id,
     )
-    run.file_path = str(ticket_path.relative_to(PROJECT_ROOT))
+    try:
+        run.file_path = str(ticket_path.relative_to(RUNTIME_PROJECT_ROOT))
+    except ValueError:
+        # Fallback defensivo: evita romper el pipeline si la ruta no cuelga
+        # de la raíz runtime esperada.
+        run.file_path = str(ticket_path)
 
     register_ticket(
         ticket_id=run.ticket_id,
@@ -570,13 +730,36 @@ async def run_pipeline(
         module=run.module,
         ticket_type=run.ticket_type,
         file_path=run.file_path,
+        tags=run.tags,
+    )
+
+    upsert_ticket_metadata(
+        run.ticket_id,
+        {
+            "run_id": run.run_id,
+            "ticket_type": run.ticket_type,
+            "domain": run.domain,
+            "module": run.module,
+            "file_path": run.file_path,
+            "tags": run.tags,
+            "revisions": run.revisions,
+            "po_feedback": run.po_feedback.strip(),
+            "input_tokens": run.total_input_tokens,
+            "output_tokens": run.total_output_tokens,
+            "total_tokens": run.total_input_tokens + run.total_output_tokens,
+            "cost_usd": round(run.total_cost_usd, 8),
+            "date": run.finished_at.strftime("%Y-%m-%d") if run.finished_at else datetime.now().strftime("%Y-%m-%d"),
+        },
     )
     run.steps.append(AgentStep("documentador", duration_secs=time.time()-t6,
                                summary=f"Guardado en {run.file_path}"))
-    print_step_done("documentador", time.time()-t6)
+    elapsed_step6 = time.time() - t6
+    print_step_done("documentador", elapsed_step6)
+    _emit_event(event_callback, "step_completed", step=6, agent="documentador", duration_secs=elapsed_step6, file_path=run.file_path)
 
     # ── PASO 7: META-OBSERVADOR ────────────────────────────────────────────────
     print_step_start(7, "meta_observador", "Aprendizaje y actualización de memoria")
+    _emit_event(event_callback, "step_started", step=7, agent="meta_observador", description="Aprendizaje y actualización de memoria")
     t7 = time.time()
     run.finished_at = datetime.now()
 
@@ -588,19 +771,59 @@ async def run_pipeline(
     # Pasar module= para que el Meta-Observador reciba el CDP Layer 1 existente
     # (si ya hay contexto del módulo, el agente lo enriquece en lugar de crearlo desde cero)
     meta_sys = build_system_prompt("meta_observador", module=run.module)
-    meta_out = run_agent("meta_observador", meta_sys,
-                         _meta_observador_prompt(trace_content, final_ticket, module=run.module))
+    meta_resp = run_agent_with_usage(
+        "meta_observador",
+        meta_sys,
+        _meta_observador_prompt(trace_content, final_ticket, module=run.module),
+    )
+    meta_out = meta_resp.text
 
     # Persistir aprendizajes del Meta-Observador
     _persist_meta_learnings(meta_out, run)
 
-    run.steps.append(AgentStep("meta_observador", duration_secs=time.time()-t7,
-                               summary="Auditoría + patrones + memoria actualizados"))
-    print_step_done("meta_observador", time.time()-t7)
+    step7 = AgentStep("meta_observador", duration_secs=time.time()-t7,
+                      summary="Auditoría + patrones + memoria actualizados")
+    _record_usage(run, step7, meta_resp)
+    run.steps.append(step7)
+    elapsed_step7 = time.time() - t7
+    print_step_done("meta_observador", elapsed_step7)
+    _emit_event(event_callback, "step_completed", step=7, agent="meta_observador", duration_secs=elapsed_step7)
 
     # ── RESUMEN FINAL ─────────────────────────────────────────────────────────
     total = (run.finished_at - run.started_at).total_seconds()
     print_success(run.ticket_id, run.ticket_name, run.file_path, total)
+    _emit_event(
+        event_callback,
+        "pipeline_completed",
+        ticket_id=run.ticket_id,
+        ticket_name=run.ticket_name,
+        file_path=run.file_path,
+        tags=run.tags,
+        total_input_tokens=run.total_input_tokens,
+        total_output_tokens=run.total_output_tokens,
+        total_cost_usd=round(run.total_cost_usd, 8),
+        duration_secs=total,
+    )
+
+    upsert_ticket_metadata(
+        run.ticket_id,
+        {
+            "run_id": run.run_id,
+            "ticket_type": run.ticket_type,
+            "domain": run.domain,
+            "module": run.module,
+            "file_path": run.file_path,
+            "tags": run.tags,
+            "revisions": run.revisions,
+            "po_feedback": run.po_feedback.strip(),
+            "input_tokens": run.total_input_tokens,
+            "output_tokens": run.total_output_tokens,
+            "total_tokens": run.total_input_tokens + run.total_output_tokens,
+            "cost_usd": round(run.total_cost_usd, 8),
+            "date": run.finished_at.strftime("%Y-%m-%d") if run.finished_at else datetime.now().strftime("%Y-%m-%d"),
+            "duration_secs": total,
+        },
+    )
 
     return run
 
@@ -712,7 +935,7 @@ def _persist_meta_learnings(meta_output: str, run: PipelineRun) -> None:
     # Estrategia: si existe, se agrega una sección de actualización al final.
     # Si no existe, se crea desde cero con el contenido del Meta-Observador.
     if sections["CONTEXTO_MODULO"] and sections["CONTEXTO_MODULO"] != "N/A" and run.module:
-        module_slug = run.module.lower().replace(" ", "-")
+        module_slug = re.sub(r"[^a-z0-9._-]+", "-", run.module.lower()).strip(" .-_") or "modulo"
         module_ctx_path = f"workspace/modules/{module_slug}/context.md"
         existing = read_project_file(module_ctx_path)
 

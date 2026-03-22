@@ -21,10 +21,12 @@ from datetime import datetime
 sys.path.insert(0, str(Path(__file__).parent))
 
 try:
-    from config import PROJECT_ROOT, WORKSPACE_DIR
+    from config import PROJECT_ROOT, WORKSPACE_DIR, PROFILE_ROOT, AGENTS_DIR
 except Exception:
     PROJECT_ROOT = Path(__file__).resolve().parent.parent
     WORKSPACE_DIR = PROJECT_ROOT / "workspace"
+    PROFILE_ROOT = PROJECT_ROOT
+    AGENTS_DIR = PROJECT_ROOT / "agents"
 
 TEMPLATES_DIR = PROJECT_ROOT / "templates"
 
@@ -354,7 +356,7 @@ def _extract_ticket_template_from_jira(lang: str) -> str | None:
     """
     try:
         from dotenv import load_dotenv
-        load_dotenv(PROJECT_ROOT / ".env")
+        load_dotenv(PROFILE_ROOT / ".env")
         import os
         base_url  = os.getenv("JIRA_BASE_URL", "")
         email     = os.getenv("JIRA_EMAIL", "")
@@ -541,7 +543,7 @@ def _bootstrap_historico_from_jira(lang: str, product_name: str) -> bool:
     """
     try:
         from dotenv import load_dotenv as _lde
-        _lde(PROJECT_ROOT / ".env", override=True)
+        _lde(PROFILE_ROOT / ".env", override=True)
         import os as _os
         base_url = _os.getenv("JIRA_BASE_URL", "").strip()
         email    = _os.getenv("JIRA_EMAIL", "").strip()
@@ -643,13 +645,32 @@ Rules: Do NOT invent. Only extract what is clearly visible. Be concise — this 
             key = _os.getenv("OPENAI_API_KEY", "")
             if key and "sk-..." not in key and len(key) > 20:
                 try:
-                    import openai as _oai
-                    client = _oai.OpenAI(api_key=key)
-                    resp = client.chat.completions.create(
-                        model=model, max_tokens=4096,
-                        messages=[{"role": "user", "content": prompt}],
+                    import urllib.request as _ureq, urllib.error as _uerr
+                    _ourl = "https://api.openai.com/v1/chat/completions"
+                    _opayload = _json.dumps({
+                        "model": model,
+                        "max_tokens": 4096,
+                        "messages": [{"role": "user", "content": prompt}],
+                    }).encode("utf-8")
+                    _oreq = _ureq.Request(
+                        _ourl,
+                        data=_opayload,
+                        headers={
+                            "Authorization": f"Bearer {key}",
+                            "Content-Type": "application/json",
+                        },
+                        method="POST",
                     )
-                    result_text = resp.choices[0].message.content
+                    with _ureq.urlopen(_oreq, timeout=120) as _oresp:
+                        _obody = _json.loads(_oresp.read().decode("utf-8"))
+                        _choices = _obody.get("choices") or []
+                        if _choices:
+                            result_text = _choices[0]["message"]["content"]
+                        else:
+                            console.print(f"  [red]AI error (OpenAI): respuesta sin choices[/red]")
+                except _uerr.HTTPError as _oe:
+                    _oerr = _oe.read().decode("utf-8", errors="replace")
+                    console.print(f"  [red]AI error (OpenAI {_oe.code}): {_oerr[:200]}[/red]")
                 except Exception as _oe:
                     console.print(f"  [red]AI error (OpenAI): {_oe}[/red]")
 
@@ -724,7 +745,7 @@ def _ensure_api_key(lang: str) -> None:
     Writes directly to .env — the user never needs to open a text editor.
     Safe to call multiple times: silently skips if a valid key already exists.
     """
-    env_path = PROJECT_ROOT / ".env"
+    env_path = PROFILE_ROOT / ".env"
     _PLACEHOLDERS = {
         "your_anthropic_key_here", "your_google_api_key_here",
         "your_openai_key_here", "sk-ant-...", "sk-...", "AIza...",
@@ -1025,7 +1046,7 @@ def run_wizard():
             if has_jira:
                 # Check if Jira credentials exist in .env
                 from dotenv import load_dotenv as _load_dotenv
-                _load_dotenv(PROJECT_ROOT / ".env", override=False)
+                _load_dotenv(PROFILE_ROOT / ".env", override=False)
                 _jira_url   = os.getenv("JIRA_BASE_URL", "")
                 _jira_email = os.getenv("JIRA_EMAIL", "")
                 _jira_token = os.getenv("JIRA_API_TOKEN", "")
@@ -1075,7 +1096,7 @@ def run_wizard():
                                     has_jira = False
                                 else:
                                     # Save to .env
-                                    _env_path = PROJECT_ROOT / ".env"
+                                    _env_path = PROFILE_ROOT / ".env"
                                     _env_txt  = _env_path.read_text(encoding="utf-8") if _env_path.exists() else ""
                                     _env_txt  = _set_env_line(_env_txt, "JIRA_BASE_URL",    _jira_url_in.rstrip("/"))
                                     _env_txt  = _set_env_line(_env_txt, "JIRA_EMAIL",       _jira_email_in)
@@ -1469,7 +1490,7 @@ def run_wizard():
     # ── Generar Directorio_Equipo.md con datos reales del equipo ─────────────
     # Este archivo es leído por el Orquestador para asignar tickets.
     # Se genera con los nombres reales ingresados en el Step 4.
-    _dir_path = PROJECT_ROOT / "agents" / "00_Orquestador" / "Directorio_Equipo.md"
+    _dir_path = AGENTS_DIR / "00_Orquestador" / "Directorio_Equipo.md"
     _dir_lines = [
         f"# EQUIPO DE PRODUCTO: DIRECTORIO Y ROLES",
         f"## Actualizado: {datetime.now().strftime('%Y-%m-%d')}",

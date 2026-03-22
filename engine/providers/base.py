@@ -6,6 +6,25 @@ Esto permite cambiar de Anthropic a OpenAI a Google sin tocar el pipeline.
 """
 from __future__ import annotations
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from typing import Any
+
+
+@dataclass(slots=True)
+class ProviderUsage:
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+    cache_read_input_tokens: int = 0
+    raw: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class ProviderResponse:
+    text: str
+    usage: ProviderUsage = field(default_factory=ProviderUsage)
+    provider: str = ""
+    model: str = ""
 
 
 class LLMProvider(ABC):
@@ -18,10 +37,10 @@ class LLMProvider(ABC):
         user_message:  str,
         model:         str,
         max_tokens:    int,
-    ) -> str:
+    ) -> ProviderResponse:
         """
         Hace una llamada aislada al LLM.
-        Retorna el texto de respuesta limpio.
+        Retorna texto + usage.
         """
         ...
 

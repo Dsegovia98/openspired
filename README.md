@@ -22,6 +22,39 @@
 
 ---
 
+## Download — macOS Desktop App
+
+> The easiest way to use Openspired. No terminal required after the first setup.
+
+**[⬇ Download Openspired for macOS (Apple Silicon + Intel)](https://github.com/Dsegovia98/openspired/releases/latest)**
+
+### Setup (first time, ~5 minutes)
+
+1. **Download** the `.dmg` from the link above
+2. **Open** the `.dmg` and drag **Openspired** to your `/Applications` folder
+3. **Launch** the app — macOS may warn "unverified developer", go to **System Settings → Privacy & Security → Open Anyway**
+4. The app opens and shows the **Ajustes (Settings)** screen automatically on first run
+5. **Choose your AI provider** and paste your API key:
+   - **Google Gemini** (recommended, cheapest): get a free key at [aistudio.google.com](https://aistudio.google.com) → API Keys
+   - **Anthropic Claude**: [console.anthropic.com](https://console.anthropic.com) → API Keys
+   - **OpenAI**: [platform.openai.com](https://platform.openai.com) → API Keys
+6. **Optional — connect Jira**: fill in Base URL (`https://yourcompany.atlassian.net`), email, and an [Atlassian API token](https://id.atlassian.com/manage-profile/security/api-tokens). Use **"Probar conexión"** to verify.
+7. Click **Guardar configuración** — the backend restarts and you're ready
+
+### Your first ticket
+
+1. Click **Nueva US** in the left sidebar
+2. Type your requirement in plain language — e.g. *"Add a filter by date range to the analytics dashboard"*
+3. Click **Generar** and watch 9 agents work in real time on the **Pipeline** screen
+4. When the agents finish, a **review card** appears — read the ticket, approve it or give written feedback
+5. If Jira is connected, the ticket is posted automatically on approval
+
+> **Your data stays on your machine.** API keys and all generated tickets are stored in `~/Library/Application Support/com.openspired.desktop/` — never uploaded anywhere.
+
+---
+
+---
+
 ## The belief behind this project
 
 When writing code becomes a commodity, product value concentrates somewhere else: in **understanding the problem deeply**, in **designing the right solution**, and in **the human judgment that decides what to build and why**.
@@ -53,14 +86,19 @@ Every approved ticket feeds the system's memory. The Meta-Observer agent updates
 git clone https://github.com/Dsegovia98/openspired.git
 cd openspired
 
-# 2. Install & launch
-chmod +x install.sh && ./install.sh
-# Installs dependencies and opens the setup wizard automatically.
-# The wizard (~5 min) asks for your AI provider key and configures your workspace.
-# No files to edit manually.
+# 2. One command: install + run + open UI
+chmod +x openspired && ./openspired
 ```
 
 > **Cheapest start:** Google Gemini Flash — a full 9-agent pipeline run costs roughly **$0.01–0.03**.
+
+### Launcher modes
+
+```bash
+./openspired             # default: API + web UI (auto-opens browser)
+./openspired --desktop   # API + Tauri desktop window
+./openspired --no-open   # useful for remote/SSH sessions
+```
 
 ---
 
@@ -119,7 +157,7 @@ Missing layers degrade gracefully — agents proceed with what's available and d
 
 ## Workspace is yours
 
-Everything in `workspace/` is gitignored. Your product knowledge, ticket history, team info, and API keys never leave your machine unless you explicitly version them in a separate private repo. Openspired is the engine — you own the fuel.
+`workspace/` is gitignored and stores context + runtime logs. Generated tickets are saved in domain folders at the runtime root (for example `App/` or `Analitica/`), which are also gitignored by default in this repo.
 
 ```
 workspace/
@@ -127,8 +165,11 @@ workspace/
 │                     # ticket_template.md, preferences.md
 │                     # .reasoning_bank/ (patterns, anti-patterns, human feedback)
 ├── modules/          # per-module context — auto-updated by Meta-Observer
-├── tickets/          # generated tickets (markdown)
 └── logs/             # registry of all tickets created
+
+Runtime root (gitignored by default):
+├── App/              # primary-domain generated tickets (US/DT)
+└── Analitica/        # secondary-domain generated tickets
 ```
 
 ---
@@ -162,6 +203,65 @@ openspired/
 | OpenAI | `gpt-4o-mini` | ~$0.02–0.04 | Solid option |
 
 Set `PROVIDER` and the matching API key in `.env`. No other config needed.
+
+---
+
+## Local API + Desktop (new)
+
+Openspired now includes a local API layer for desktop/web UI integration without changing the core pipeline logic.
+
+### Start local API (manual/debug)
+
+```bash
+python engine/run.py --serve-api
+```
+
+By default it binds to `127.0.0.1:8765` and writes a session token to:
+
+`workspace/logs/.api_token`
+
+### API endpoints
+
+- `POST /runs`
+- `GET /runs/{run_id}`
+- `GET /runs/{run_id}/events` (SSE)
+- `POST /runs/{run_id}/review`
+- `GET /config/status`
+- `POST /setup`
+- `GET /artifacts`
+
+### Desktop scaffold
+
+A Tauri + React desktop shell is available in `desktop/`:
+
+```bash
+cd desktop
+npm install
+npm run tauri dev
+```
+
+Desktop app now boots the local backend automatically when it opens.
+For end users, no extra API terminal is required.
+
+### Build macOS installer (.app + .dmg)
+
+```bash
+bash scripts/build-macos-installer.sh
+```
+
+Artifacts are generated in `dist/macos/`.
+
+Signed + notarized release:
+
+```bash
+# one-time: store Apple credentials in keychain profile
+bash scripts/setup-notary-profile.sh openspired-notary
+
+# every release
+MACOS_SIGN_IDENTITY="Developer ID Application: YOUR COMPANY (TEAMID1234)" \
+MACOS_NOTARY_PROFILE="openspired-notary" \
+bash scripts/build-macos-installer.sh --notarize
+```
 
 ---
 

@@ -53,14 +53,19 @@ Cada ticket aprobado alimenta la memoria del sistema. El agente Meta-Observador 
 git clone https://github.com/Dsegovia98/openspired.git
 cd openspired
 
-# 2. Instalar y ejecutar
-chmod +x install.sh && ./install.sh
-# Instala dependencias y abre el wizard de configuración automáticamente.
-# El wizard (~5 min) te pide tu API key y configura tu workspace.
-# Sin archivos que editar manualmente.
+# 2. Un comando: instala + levanta + abre UI
+chmod +x openspired && ./openspired
 ```
 
 > **Opción más barata:** Google Gemini Flash — un pipeline completo de 9 agentes cuesta aproximadamente **$0.01–0.03**.
+
+### Modos del launcher
+
+```bash
+./openspired             # default: API + UI web (abre navegador automáticamente)
+./openspired --desktop   # API + ventana desktop con Tauri
+./openspired --no-open   # útil para sesiones remotas/SSH
+```
 
 ---
 
@@ -119,7 +124,7 @@ Las capas faltantes degradan de forma elegante — los agentes continúan con lo
 
 ## El workspace es tuyo
 
-Todo en `workspace/` está en el gitignore. Tu conocimiento del producto, historial de tickets, información del equipo y API keys nunca salen de tu máquina a menos que los versiones explícitamente en un repo privado. Openspired es el motor — tú eres el dueño del combustible.
+`workspace/` está en el gitignore y guarda contexto + logs de ejecución. Los tickets generados se guardan en carpetas de dominio en la raíz runtime (por ejemplo `App/` o `Analitica/`), que también están gitignored por defecto en este repo.
 
 ```
 workspace/
@@ -127,8 +132,11 @@ workspace/
 │                     # ticket_template.md, preferences.md
 │                     # .reasoning_bank/ (patrones, anti-patrones, feedback humano)
 ├── modules/          # contexto por módulo — actualizado automáticamente por Meta-Observador
-├── tickets/          # tickets generados (markdown)
 └── logs/             # registro de todos los tickets creados
+
+Raíz runtime (gitignored por defecto):
+├── App/              # tickets generados del dominio primario (US/DT)
+└── Analitica/        # tickets generados del dominio secundario
 ```
 
 ---
@@ -145,7 +153,8 @@ openspired/
 │   └── Workflows/
 ├── templates/        # Templates de onboarding — se renderizan en workspace/ en el primer run
 ├── workspace/        # Tu contexto de producto (gitignored)
-├── install.sh        # Setup en un solo comando
+├── openspired        # Launcher todo-en-uno (API + UI)
+├── install.sh        # Instalador legacy de CLI
 ├── .env.example      # Template de variables de entorno
 └── requirements.txt
 ```
@@ -162,6 +171,65 @@ openspired/
 | OpenAI | `gpt-4o-mini` | ~$0.02–0.04 | Buena opción |
 
 Configura `PROVIDER` y la API key correspondiente en `.env`. No se requiere ninguna otra configuración.
+
+---
+
+## API local + Desktop (nuevo)
+
+Openspired ahora incluye una capa de API local para integrar UI desktop/web sin cambiar la lógica central del pipeline.
+
+### Iniciar API local (manual/debug)
+
+```bash
+python engine/run.py --serve-api
+```
+
+Por defecto escucha en `127.0.0.1:8765` y escribe un token de sesión en:
+
+`workspace/logs/.api_token`
+
+### Endpoints API
+
+- `POST /runs`
+- `GET /runs/{run_id}`
+- `GET /runs/{run_id}/events` (SSE)
+- `POST /runs/{run_id}/review`
+- `GET /config/status`
+- `POST /setup`
+- `GET /artifacts`
+
+### Scaffold desktop
+
+Hay un shell base Tauri + React en `desktop/`:
+
+```bash
+cd desktop
+npm install
+npm run tauri dev
+```
+
+La app desktop ahora levanta el backend local automáticamente al abrir.
+Para usuario final, ya no se requiere una terminal extra de API.
+
+### Generar instalador macOS (.app + .dmg)
+
+```bash
+bash scripts/build-macos-installer.sh
+```
+
+Los artefactos quedan en `dist/macos/`.
+
+Release firmado + notarizado:
+
+```bash
+# una sola vez: guardar credenciales Apple en perfil de keychain
+bash scripts/setup-notary-profile.sh openspired-notary
+
+# en cada release
+MACOS_SIGN_IDENTITY="Developer ID Application: TU EMPRESA (TEAMID1234)" \
+MACOS_NOTARY_PROFILE="openspired-notary" \
+bash scripts/build-macos-installer.sh --notarize
+```
 
 ---
 

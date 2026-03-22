@@ -35,6 +35,9 @@ python run.py "Agregar sección de logs al módulo de Support para registrar cam
 
 # Verificar configuración
 python run.py --check
+
+# Levantar API local (para desktop/UI)
+python run.py --serve-api
 ```
 
 ---

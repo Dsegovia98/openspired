@@ -12,7 +12,7 @@ import asyncio
 import threading
 from typing import Optional
 import config
-from providers.base import LLMProvider
+from providers.base import LLMProvider, ProviderResponse
 
 # ─── Singleton del proveedor activo ──────────────────────────────────────────
 # El Lock garantiza que dos coroutines paralelas (ej: ideador + researcher)
@@ -66,7 +66,27 @@ def run_agent(
     """
     model    = config.AGENT_MODELS.get(agent_name, config.DEFAULT_MODEL)
     provider = _get_provider()
-    return provider.call(system_prompt, user_message, model, max_tokens)
+    response = provider.call(system_prompt, user_message, model, max_tokens)
+    return response.text
+
+
+def run_agent_with_usage(
+    agent_name:    str,
+    system_prompt: str,
+    user_message:  str,
+    max_tokens:    int = config.MAX_TOKENS,
+) -> ProviderResponse:
+    """
+    Igual que run_agent, pero retorna usage + metadata además del texto.
+    """
+    model    = config.AGENT_MODELS.get(agent_name, config.DEFAULT_MODEL)
+    provider = _get_provider()
+    response = provider.call(system_prompt, user_message, model, max_tokens)
+    if not response.model:
+        response.model = model
+    if not response.provider:
+        response.provider = provider.name
+    return response
 
 
 async def run_agent_async(
@@ -81,6 +101,24 @@ async def run_agent_async(
     """
     return await asyncio.to_thread(
         run_agent,
+        agent_name,
+        system_prompt,
+        user_message,
+        max_tokens,
+    )
+
+
+async def run_agent_async_with_usage(
+    agent_name:    str,
+    system_prompt: str,
+    user_message:  str,
+    max_tokens:    int = config.MAX_TOKENS,
+) -> ProviderResponse:
+    """
+    Versión async con usage para ejecución paralela.
+    """
+    return await asyncio.to_thread(
+        run_agent_with_usage,
         agent_name,
         system_prompt,
         user_message,

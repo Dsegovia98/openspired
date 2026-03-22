@@ -15,7 +15,7 @@ import json
 import time
 import urllib.request
 import urllib.error
-from .base import LLMProvider
+from .base import LLMProvider, ProviderResponse, ProviderUsage
 
 _API_URL     = "https://api.anthropic.com/v1/messages"
 _API_VERSION = "2023-06-01"
@@ -37,7 +37,7 @@ class AnthropicProvider(LLMProvider):
     def name(self) -> str:
         return "anthropic"
 
-    def call(self, system_prompt: str, user_message: str, model: str, max_tokens: int) -> str:
+    def call(self, system_prompt: str, user_message: str, model: str, max_tokens: int) -> ProviderResponse:
         # Con caching: system prompt como lista con cache_control
         # Sin caching: system prompt como string plano (más compatible)
         if self._use_cache:
@@ -75,7 +75,20 @@ class AnthropicProvider(LLMProvider):
                     content = body.get("content")
                     if not content or not isinstance(content, list):
                         raise RuntimeError(f"Anthropic API returned empty content: {body}")
-                    return content[0]["text"]
+                    usage_data = body.get("usage", {}) if isinstance(body.get("usage", {}), dict) else {}
+                    usage = ProviderUsage(
+                        input_tokens=int(usage_data.get("input_tokens", 0) or 0),
+                        output_tokens=int(usage_data.get("output_tokens", 0) or 0),
+                        cache_creation_input_tokens=int(usage_data.get("cache_creation_input_tokens", 0) or 0),
+                        cache_read_input_tokens=int(usage_data.get("cache_read_input_tokens", 0) or 0),
+                        raw=usage_data,
+                    )
+                    return ProviderResponse(
+                        text=content[0]["text"],
+                        usage=usage,
+                        provider=self.name,
+                        model=model,
+                    )
 
             except urllib.error.HTTPError as e:
                 code     = e.code

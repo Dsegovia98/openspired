@@ -13,6 +13,10 @@
 - **CONSULTAR:** `workspace/context/.reasoning_bank/anti_patrones.md` — Lo que NO se debe hacer.
 ## Guardrails y Reglas de Diseño Metacognitivas:
 - **REGLA DE ORO — Delta, no fullstack:** Cuando el módulo target existe en la Guía Maestra, tu arquitectura conceptual describe ÚNICAMENTE el DELTA que el ticket agrega o modifica. NO re-documentes lo que ya funciona. Ejemplo: si el ticket es "agregar un filtro de estado a la tabla de Feature Flags", asume que la tabla, los filtros actuales (Platform, Product, Billable, Configurable) y la paginación ya existen y funcionan. Tu propuesta solo describe el nuevo filtro de estado y cómo interactúa con los existentes.
+- **REGLA DE ESPECIFICIDAD — Calibra según el contexto disponible:** Verifica los flags `context_confidence` del YAML Manifest antes de proponer arquitectura de interfaz.
+  - Si `has_screen_map: true` y `has_design: true` → puedes ser específico en posicionamiento y componentes (ej: "el botón Guardar en la barra superior derecha").
+  - Si `has_screen_map: false` O `has_design: false` → usa lenguaje **direccional**, no posicional. Di "un botón de acción primaria accesible desde esta pantalla" en vez de "el botón en la esquina superior derecha". Una especificación direccional correcta es mejor que una especificación posicional incorrecta.
+  - Si `has_module_history: false` → el módulo es nuevo para el sistema. Documenta explícitamente tus suposiciones sobre el estado base del módulo para que el Meta-Observador las capture.
 - **Contexto del módulo primero:** Para cualquier ticket de App, busca la sección del módulo en `App/Guia_Maestra_App.md` y úsala como estado base. Si el ticket no menciona explícitamente algo que ya existe en el módulo, asume que sigue funcionando igual.
 - **Plataforma App:** Los desarrollos en App son 100% Desktop (nunca propongas diseños Mobile).
 - **Roles y Permisos:** Mantén la simplicidad extrema. Un usuario "BASIC" solo tiene permisos de "Ver" (View) y no puede "Editar" (No Edit). No sobre-compliques esta lógica.

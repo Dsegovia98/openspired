@@ -37,8 +37,12 @@ def _read_workspace(rel: str) -> Optional[str]:
 
 
 def _read_agent(rel: str) -> Optional[str]:
-    """Read a file relative to agents/."""
-    return _read(config.AGENTS_DIR / rel)
+    """Read a file relative to agents/ with profile override fallback."""
+    for base in config.AGENT_SEARCH_DIRS:
+        content = _read(base / rel)
+        if content:
+            return content
+    return None
 
 
 def _section(title: str, content: str) -> str:
@@ -70,7 +74,7 @@ def _product_guide() -> Optional[str]:
     """
     candidates = [
         config.WORKSPACE_DIR / "context" / "product_guide.md",
-        config.PROJECT_ROOT / config.DOMAIN_PRIMARY / f"Guia_Maestra_{config.DOMAIN_PRIMARY}.md",
+        config.RUNTIME_PROJECT_ROOT / config.DOMAIN_PRIMARY / f"Guia_Maestra_{config.DOMAIN_PRIMARY}.md",
     ]
     for path in candidates:
         content = _read(path)
@@ -143,6 +147,7 @@ AGENT_CONTEXT: dict[str, list[tuple[str, any]]] = {
         ("SPRINT CONTEXT",           _w("context/sprint_context.md")),
         ("PRODUCT KNOWLEDGE",        _w("context/product_knowledge.md")),
         ("TEAM DIRECTORY",           _w("context/team.md")),
+        ("INTERFACE MAP",            _w("context/interface_map.md")),
         ("TICKET REGISTRY",          _w("logs/_Registro.md")),
         ("HISTORICAL CONTEXT",       _w("context/Contexto_Historico_Proyecto.md")),
         ("AGENT DEFINITION",         _a("00_Orquestador/00_Orquestador.md")),
@@ -166,10 +171,11 @@ AGENT_CONTEXT: dict[str, list[tuple[str, any]]] = {
         ("ENTITY RELATIONSHIPS",     _w("context/relationships.md")),
         ("SPRINT CONTEXT",           _w("context/sprint_context.md")),
         ("HISTORICAL CONTEXT",       _w("context/Contexto_Historico_Proyecto.md")),
+        ("ARCH DECISIONS",           _w("context/decisiones_arquitectura.md")),
         ("SUCCESSFUL PATTERNS",      _w("context/.reasoning_bank/patrones_exitosos.md")),
         ("AGENT DEFINITION",         _a("03_Researcher/03_Researcher.md")),
         ("SKILL: HISTORICAL SEARCH", _a("03_Researcher/Skills/01_Skill_Busqueda_Historica.md")),
-        ("SKILL: CONTEXT EXTRACTION",_a("03_Researcher/Skills/02_Skill_Extraccion_Contexto.md")),
+        ("SKILL: MODULE BOOTSTRAP",  _a("03_Researcher/Skills/02_Skill_Bootstrap_Modulo.md")),
     ],
 
     "dev_concepto": [
@@ -177,8 +183,11 @@ AGENT_CONTEXT: dict[str, list[tuple[str, any]]] = {
         ("SPRINT CONTEXT",           _w("context/sprint_context.md")),
         ("PRODUCT KNOWLEDGE",        _w("context/product_knowledge.md")),
         ("PRODUCT GUIDE",            _product_guide),          # CDP Layer 2: master guide
+        ("INTERFACE MAP",            _w("context/interface_map.md")),
         ("TICKET TEMPLATE",          _w("context/ticket_template.md")),
         ("ENTITY RELATIONSHIPS",     _w("context/relationships.md")),
+        ("ARCH DECISIONS",           _w("context/decisiones_arquitectura.md")),
+        ("PRD INDEX",                _w("context/decisiones_prd.md")),
         ("SUCCESSFUL PATTERNS",      _w("context/.reasoning_bank/patrones_exitosos.md")),
         ("ANTI-PATTERNS",            _w("context/.reasoning_bank/anti_patrones.md")),
         ("HISTORICAL CONTEXT",       _w("context/Contexto_Historico_Proyecto.md")),
@@ -193,11 +202,13 @@ AGENT_CONTEXT: dict[str, list[tuple[str, any]]] = {
         ("SPRINT CONTEXT",           _w("context/sprint_context.md")),
         ("PRODUCT KNOWLEDGE",        _w("context/product_knowledge.md")),
         ("PRODUCT GUIDE",            _product_guide),          # CDP Layer 2: master guide
+        ("INTERFACE MAP",            _w("context/interface_map.md")),
         ("TICKET TEMPLATE",          _w("context/ticket_template.md")),
         ("ENTITY RELATIONSHIPS",     _w("context/relationships.md")),
         ("HUMAN FEEDBACK",           _recent_feedback),         # last N entries only
         ("SUCCESSFUL PATTERNS",      _w("context/.reasoning_bank/patrones_exitosos.md")),
         ("ANTI-PATTERNS",            _w("context/.reasoning_bank/anti_patrones.md")),
+        ("PRD INDEX",                _w("context/decisiones_prd.md")),
         ("AGENT DEFINITION",         _a("05_Escritor_USs/05_Escritor_USs.md")),
         ("SKILL: JIRA FORMAT",       _a("05_Escritor_USs/Skills/01_Skill_Traduccion_Jira_Markup.md")),
         ("SKILL: BDD",               _a("05_Escritor_USs/Skills/02_Skill_Estructuracion_BDD.md")),
@@ -238,6 +249,14 @@ AGENT_CONTEXT: dict[str, list[tuple[str, any]]] = {
         ("SPRINT CONTEXT",           _w("context/sprint_context.md")),
         ("UNIVERSAL RULES",          _w("context/global.md")),
         # CDP Layer 1 (CURRENT MODULE CONTEXT) injected dynamically via build_system_prompt(module=...)
+    ],
+
+    # Agente standalone — usado por map_interface.py, no por el pipeline principal
+    "mapeador": [
+        ("UNIVERSAL RULES",          _w("context/global.md")),
+        ("CURRENT INTERFACE MAP",    _w("context/interface_map.md")),
+        ("AGENT DEFINITION",         _a("09_Mapeador_Interfaz/09_Mapeador_Interfaz.md")),
+        ("SKILL: NAVEGACIÓN FRACTAL",_a("09_Mapeador_Interfaz/Skills/01_Skill_Navegacion_Fractal_Mapa.md")),
     ],
 }
 

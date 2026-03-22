@@ -5,28 +5,20 @@ Estructura: <PROJECT_ROOT>/engine/config.py
 """
 from __future__ import annotations
 import os
+import shutil
 from pathlib import Path
 from dotenv import load_dotenv
+from profile_loader import resolve_runtime_paths, resolve_agent_file
 
-# ─── Workspace mode detection ─────────────────────────────────────────────────
+# ─── Profile/Workspace mode detection ─────────────────────────────────────────
 #
-# External workspace mode: set WORKSPACE_PATH env var before running.
-# Openspired will load .env from the workspace's parent directory and use
-# that workspace for all context files (global.md, sprint_context.md, etc.).
+# Resolution order:
+#   1) OPENSPIRED_PROFILE_PATH (or PROFILE_PATH)
+#   2) PROJECT_PATH / WORKSPACE_PATH compatibility env vars
+#   3) core standalone mode (repo-root workspace/)
 #
-# Example (run.sh in an external project):
-#   export WORKSPACE_PATH="/path/to/my-project/workspace"
-#   export AGENTS_PATH="/path/to/my-project/agents"   # optional
-#   python /path/to/openspired/engine/run.py
-#
-_workspace_path_env = os.getenv("WORKSPACE_PATH", "")
-
-# .env vive en la raíz del proyecto, o junto al workspace externo
-if _workspace_path_env:
-    _ENV_FILE = Path(_workspace_path_env).parent / ".env"
-else:
-    _ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
-load_dotenv(_ENV_FILE, override=True)
+# The selected profile controls runtime data (.env, workspace, logs, overrides).
+# Core source code always comes from this repository.
 
 
 def _find_project_root() -> Path:
@@ -35,13 +27,66 @@ def _find_project_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+_CORE_ROOT = _find_project_root()
+_RUNTIME = resolve_runtime_paths(_CORE_ROOT)
+_ENV_FILE = _RUNTIME.env_file
+
+# ─── Tenant mode guards / env bootstrap ───────────────────────────────────────
+_REQUIRE_PROFILE = os.getenv("OPENSPIRED_REQUIRE_PROFILE", "false").lower() in {
+    "1", "true", "yes", "on"
+}
+if _REQUIRE_PROFILE and _RUNTIME.source == "core_default":
+    raise EnvironmentError(
+        "Tenant mode requires an external profile.\n"
+        "Set OPENSPIRED_PROFILE_PATH (or PROJECT_PATH/WORKSPACE_PATH) before startup."
+    )
+
+_CORE_ENV_PATH = _CORE_ROOT / ".env"
+_CORE_ENV_EXAMPLE_PATH = _CORE_ROOT / ".env.example"
+ENV_MIGRATED_FROM_CORE = False
+if _RUNTIME.source != "core_default" and not _ENV_FILE.exists():
+    # One-time bootstrap for profile env:
+    # prefer legacy core .env if present; otherwise seed from .env.example.
+    _ENV_FILE.parent.mkdir(parents=True, exist_ok=True)
+    if _CORE_ENV_PATH.exists():
+        shutil.copy2(_CORE_ENV_PATH, _ENV_FILE)
+        ENV_MIGRATED_FROM_CORE = True
+    elif _CORE_ENV_EXAMPLE_PATH.exists():
+        shutil.copy2(_CORE_ENV_EXAMPLE_PATH, _ENV_FILE)
+
+CORE_ENV_IGNORED = (_RUNTIME.source != "core_default") and _CORE_ENV_PATH.exists()
+load_dotenv(_ENV_FILE, override=True)
+
+
 # ─── Rutas ────────────────────────────────────────────────────────────────────
-PROJECT_ROOT:  Path = _find_project_root()
+PROJECT_ROOT:  Path = _CORE_ROOT
+RUNTIME_PROJECT_ROOT: Path = _RUNTIME.runtime_project_root
 ENGINE_DIR:    Path = Path(__file__).parent
-WORKSPACE_DIR: Path = Path(_workspace_path_env) if _workspace_path_env else PROJECT_ROOT / "workspace"
-AGENTS_DIR:    Path = Path(os.getenv("AGENTS_PATH", str(PROJECT_ROOT / "agents")))
+ENV_FILE:      Path = _ENV_FILE
+PROFILE_ROOT:  Path = _RUNTIME.profile_root
+PROFILE_FILE:  Path | None = _RUNTIME.profile_file
+PROFILE_NAME:  str = _RUNTIME.profile_name
+PROFILE_SOURCE: str = _RUNTIME.source
+PROFILE_SCHEMA_VERSION: int | None = _RUNTIME.profile_schema_version
+PROFILE_MIN_ENGINE: str | None = _RUNTIME.profile_min_engine
+WORKSPACE_DIR: Path = _RUNTIME.workspace_dir
+AGENTS_DIR:    Path = _RUNTIME.agents_dir
+AGENTS_OVERRIDE_DIR: Path | None = _RUNTIME.agents_override_dir
+AGENT_SEARCH_DIRS: tuple[Path, ...] = _RUNTIME.agent_search_dirs
 LOGS_DIR:      Path = WORKSPACE_DIR / "logs"
 RUNS_DIR:      Path = LOGS_DIR / "pipeline_runs"
+
+# Contrato estable core/profile (alias explícitos)
+PROJECT_PATH: Path = RUNTIME_PROJECT_ROOT
+WORKSPACE_PATH: Path = WORKSPACE_DIR
+AGENTS_PATH: Path = AGENTS_DIR
+REQUIRE_PROFILE: bool = _REQUIRE_PROFILE
+
+
+def resolve_agent_path(rel: str | Path) -> Path:
+    """Resuelve un archivo de agente con prioridad: profile override > core."""
+    return resolve_agent_file(rel, AGENT_SEARCH_DIRS)
+
 
 # ─── Proveedor y modelos ───────────────────────────────────────────────────────
 #
@@ -59,6 +104,9 @@ MAX_REVISIONS: int  = int(os.getenv("MAX_REVISIONS", "2"))
 ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
 OPENAI_API_KEY:    str = os.getenv("OPENAI_API_KEY",    "")
 GOOGLE_API_KEY:    str = os.getenv("GOOGLE_API_KEY",    "")
+ALLOW_EMPTY_CONFIG: bool = os.getenv("OPENSPIRED_ALLOW_EMPTY_CONFIG", "false").lower() in {
+    "1", "true", "yes", "on"
+}
 
 # ─── Modelo por agente (opcional — override del DEFAULT_MODEL) ────────────────
 #
@@ -89,13 +137,14 @@ _KEY_MAP = {
     "google":    GOOGLE_API_KEY,
 }
 if not _KEY_MAP.get(PROVIDER):
-    _key_var = {"anthropic": "ANTHROPIC_API_KEY",
-                "openai":    "OPENAI_API_KEY",
-                "google":    "GOOGLE_API_KEY"}.get(PROVIDER, "API_KEY")
-    raise EnvironmentError(
-        f"Proveedor '{PROVIDER}' seleccionado pero {_key_var} no está configurada.\n"
-        f"Edita {_ENV_FILE} y agrega tu API key."
-    )
+    if not ALLOW_EMPTY_CONFIG:
+        _key_var = {"anthropic": "ANTHROPIC_API_KEY",
+                    "openai":    "OPENAI_API_KEY",
+                    "google":    "GOOGLE_API_KEY"}.get(PROVIDER, "API_KEY")
+        raise EnvironmentError(
+            f"Proveedor '{PROVIDER}' seleccionado pero {_key_var} no está configurada.\n"
+            f"Edita {_ENV_FILE} y agrega tu API key."
+        )
 
 RUNS_DIR.mkdir(parents=True, exist_ok=True)
 

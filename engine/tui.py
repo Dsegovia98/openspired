@@ -7,6 +7,7 @@ Usage:
 """
 from __future__ import annotations
 import asyncio
+import json
 import re
 import os
 import sys
@@ -85,11 +86,17 @@ def _sprint_name() -> str:
 
 def _ticket_count() -> int:
     try:
-        registry = WORKSPACE_DIR / "logs" / "registry.md"
-        if registry.exists():
-            rows = [l for l in registry.read_text().split("\n")
-                    if l.strip().startswith("|") and "---" not in l and "Ticket" not in l]
-            return len(rows)
+        registry_paths = [
+            WORKSPACE_DIR / "logs" / "_Registro.md",
+            WORKSPACE_DIR / "logs" / "registry.md",  # fallback legacy
+        ]
+        for registry in registry_paths:
+            if registry.exists():
+                rows = [
+                    l for l in registry.read_text().split("\n")
+                    if re.match(r"^\|\s*(US|DT)-", l.strip())
+                ]
+                return len(rows)
     except Exception:
         pass
     return 0
@@ -210,20 +217,46 @@ def _update_ticket_template(lang: str = "en") -> None:
 
 
 def _extract_dependencies(text: str) -> list[str]:
-    """Extract bullet items from a [[DEPENDENCIES]] block in ticket text."""
-    match = re.search(r'\[\[DEPENDENCIES\]\](.*?)(?=\[\[|\Z)', text, re.DOTALL | re.IGNORECASE)
-    if not match:
-        return []
-    block = match.group(1).strip()
     items = []
-    for line in block.split('\n'):
-        line = line.strip()
-        if not line:
-            continue
-        clean = re.sub(r'^[-*•·]\s+', '', line)
-        clean = re.sub(r'^\d+\.\s+', '', clean)
-        if clean and not clean.startswith('#'):
-            items.append(clean)
+
+    # Formato legacy:
+    # [[DEPENDENCIES]]
+    # - item 1
+    # - item 2
+    block_match = re.search(r'\[\[DEPENDENCIES\]\](.*?)(?=\[\[|\Z)', text, re.DOTALL | re.IGNORECASE)
+    if block_match:
+        block = block_match.group(1).strip()
+        for line in block.split('\n'):
+            line = line.strip()
+            if not line:
+                continue
+            clean = re.sub(r'^[-*•·]\s+', '', line)
+            clean = re.sub(r'^\d+\.\s+', '', clean)
+            if clean and not clean.startswith('#'):
+                items.append(clean)
+
+    # Formato actual:
+    # [[DEPENDENCIES: {"type":"...", "target":"...", "blocking":true, "reason":"..."}]]
+    inline = re.findall(r'\[\[DEPENDENCIES:\s*(\{.*?\})\s*\]\]', text, re.DOTALL | re.IGNORECASE)
+    for raw_json in inline:
+        parsed = None
+        try:
+            parsed = json.loads(raw_json)
+        except Exception:
+            parsed = None
+
+        if isinstance(parsed, dict):
+            target = str(parsed.get("target", "Dependency")).strip() or "Dependency"
+            reason = str(parsed.get("reason", "")).strip()
+            blocking = parsed.get("blocking")
+            prefix = "[BLOCKING] " if blocking is True else ""
+            msg = f"{prefix}{target}"
+            if reason:
+                msg += f": {reason}"
+            items.append(msg)
+        else:
+            items.append(raw_json.strip())
+
     return [i for i in items if i]
 
 
@@ -620,7 +653,9 @@ def _jira_mode():
 # ─── [3] Ticket registry ──────────────────────────────────────────────────────
 
 def _show_registry():
-    path = WORKSPACE_DIR / "logs" / "registry.md"
+    path = WORKSPACE_DIR / "logs" / "_Registro.md"
+    if not path.exists():
+        path = WORKSPACE_DIR / "logs" / "registry.md"  # fallback legacy
     console.print()
     if not path.exists():
         console.print("  [dim]No tickets yet. Create your first one with [1].[/dim]")
