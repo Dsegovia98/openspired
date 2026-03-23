@@ -1,4 +1,4 @@
-import { BookOpen, ChevronDown, ChevronRight, Eye, EyeOff, History, Lightbulb, Loader2, Play, Plus, Settings, UserCheck, Zap } from "lucide-react";
+import { AlertTriangle, BookOpen, Check, ChevronDown, ChevronRight, Eye, EyeOff, History, Lightbulb, Loader2, MessageSquare, Play, Plus, Settings, UserCheck, XCircle, Zap } from "lucide-react";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import logoUrl from "/logo.png";
 import { apiGet, apiPost, applySetup, BootstrapResult, ContextFileMeta, createRun, IdeaItem, Provider, RunMode, SetupPayload, streamRunEvents, TicketTypeHint } from "./api/client";
@@ -30,16 +30,132 @@ type ReviewData = {
 // ── Constants ──────────────────────────────────────────────────────────────
 const TERMINAL = new Set(["run_completed", "run_failed", "run_discarded"]);
 
-const EVENT_LABEL: Record<string, string> = {
-  run_queued: "En cola",
-  run_started: "Pipeline iniciado",
-  review_required: "Esperando revisión humana",
-  review_approved: "Aprobado — continuando",
-  review_feedback: "Feedback recibido — reescribiendo",
-  review_discarded: "Run descartado",
-  run_completed: "Completado y publicado ✓",
-  run_failed: "Error en el pipeline",
+const AGENT_DISPLAY: Record<string, { name: string; role: string }> = {
+  orquestador:     { name: "Orquestador",      role: "Clasifica el requerimiento y genera el manifiesto del ticket" },
+  ideador:         { name: "Ideador",           role: "Explora ángulos y casos de uso del problema" },
+  researcher:      { name: "Researcher",        role: "Investiga el historial y contexto del módulo" },
+  dev_concepto:    { name: "Dev de Concepto",   role: "Diseña la arquitectura y anticipa edge cases" },
+  escritor:        { name: "Escritor",          role: "Redacta el ticket bilingüe completo" },
+  qa:              { name: "Agente QA",         role: "Verifica calidad técnica y criterios de aceptación" },
+  feedback:        { name: "Agente Feedback",   role: "Revisa claridad, coherencia y completitud" },
+  documentador:    { name: "Documentador",      role: "Guarda el ticket y actualiza el registro" },
+  meta_observador: { name: "Meta-Observador",   role: "Aprende de esta corrida y actualiza la memoria del sistema" },
 };
+
+type EventContent = { title: string; sub?: string; state: "running" | "done" | "warn" | "error" | "info" | "muted" };
+const SKIP_EVENT_TYPES = new Set(["pipeline_completed"]);
+
+const PROVIDER_DEFAULT_MODELS: Record<string, string> = {
+  google:    "gemini-2.5-flash-lite",
+  openai:    "gpt-4o-mini",
+  anthropic: "claude-haiku-4-5-20251001",
+};
+
+function getEventContent(ev: RunEvent): EventContent | null {
+  if (SKIP_EVENT_TYPES.has(ev.type)) return null;
+  const p = ((ev.payload ?? {}) as Record<string, unknown>);
+  const agent = p.agent as string | undefined;
+  const agents = p.agents as string[] | undefined;
+  const durSecs = p.duration_secs as number | undefined;
+  const dur = durSecs != null ? `${durSecs.toFixed(1)}s` : undefined;
+  function aName(k: string) { return AGENT_DISPLAY[k]?.name ?? k.replace(/_/g, " "); }
+
+  switch (ev.type) {
+    case "run_queued":
+      return { title: "Run en cola — iniciando pipeline…", state: "muted" };
+    case "run_started":
+      return { title: "Pipeline iniciado — los agentes están en marcha", sub: "Procesando tu requerimiento", state: "running" };
+    case "pipeline_started":
+      return { title: "Inicio de iteración — pipeline activo", sub: "El orquestador tomará las decisiones de flujo", state: "running" };
+    case "human_review_waiting":
+      return { title: "Esperando feedback del experto…", sub: "El pipeline está en pausa hasta tu decisión", state: "warn" };
+    case "human_review_feedback":
+      return { title: "El experto envió su feedback — aplicando cambios", sub: p.feedback ? truncate(p.feedback as string, 72) : undefined, state: "info" };
+    case "step_started": {
+      const info = agent ? AGENT_DISPLAY[agent] : undefined;
+      return { title: `${info?.name ?? aName(agent ?? "Agente")} está analizando…`, sub: info?.role, state: "running" };
+    }
+    case "step_completed": {
+      const info = agent ? AGENT_DISPLAY[agent] : undefined;
+      const rev = p.revision as number | undefined;
+      return {
+        title: `${info?.name ?? aName(agent ?? "Agente")} terminó su análisis`,
+        sub: [dur, rev != null ? `revisión ${rev}` : undefined].filter(Boolean).join(" · ") || undefined,
+        state: "done",
+      };
+    }
+    case "parallel_started": {
+      if (!agents?.length) return { title: "Agentes iniciados en paralelo", state: "running" };
+      return {
+        title: `${agents.map(aName).join(" + ")} trabajando juntos`,
+        sub: "Procesamiento en paralelo para mayor velocidad",
+        state: "running",
+      };
+    }
+    case "parallel_completed": {
+      const names = agents?.map(aName).join(" + ") ?? "Agentes";
+      const status = p.status as string | undefined;
+      return {
+        title: status === "pass" ? `${names} — sin observaciones ✓` : `${names} — análisis listo`,
+        sub: dur,
+        state: "done",
+      };
+    }
+    case "qa_feedback_revision": {
+      const issues = (p.issues as string[] | undefined) ?? [];
+      const rev = p.revision as number | undefined;
+      return {
+        title: `Iteración ${rev ?? ""}: ${issues.length} ${issues.length === 1 ? "observación" : "observaciones"} — Escritor corrigiendo`,
+        sub: issues.slice(0, 2).join(" · ") || undefined,
+        state: "warn",
+      };
+    }
+    case "qa_feedback_escalated":
+      return { title: "Máximo de iteraciones — escalando a tu revisión", sub: "El sistema necesita tu criterio para continuar", state: "warn" };
+    case "review_required": {
+      const ticketType = p.ticket_type as string | undefined;
+      const module = p.module as string | undefined;
+      const iter = (p.revision as number | undefined) ?? 0;
+      const parts = [module && `Módulo: ${module}`, iter > 0 && `Revisión #${iter + 1}`].filter(Boolean);
+      return {
+        title: `Tu turno — ${ticketType ?? "ticket"} listo para tu revisión`,
+        sub: parts.join(" · ") || undefined,
+        state: "warn",
+      };
+    }
+    case "review_approved":
+    case "human_review_approved":
+      return { title: "Aprobaste el ticket ✓ — publicando en Jira…", state: "done" };
+    case "review_feedback": {
+      const fb = p.feedback as string | undefined;
+      return { title: "Feedback enviado — Escritor reescribiendo el ticket", sub: fb ? truncate(fb, 72) : undefined, state: "info" };
+    }
+    case "human_review_feedback_applied": {
+      const iter = p.iteration as number | undefined;
+      return { title: `Ticket revisado con tu feedback${iter ? ` (v${iter})` : ""}`, sub: dur, state: "done" };
+    }
+    case "feedback_saved":
+      return { title: "Tu feedback quedó grabado en la memoria del sistema", sub: "El Escritor lo aplicará automáticamente en tickets futuros", state: "done" };
+    case "review_discarded":
+    case "run_discarded":
+      return { title: "Ticket descartado por el PO", state: "error" };
+    case "run_completed": {
+      const ticketName = p.ticket_name as string | undefined;
+      const ticketId = p.ticket_id as string | undefined;
+      const cost = p.total_cost_usd as number | undefined;
+      return {
+        title: `¡${ticketName || ticketId || "Ticket"} publicado en Jira!`,
+        sub: cost != null ? `$${cost.toFixed(4)} USD` : undefined,
+        state: "done",
+      };
+    }
+    case "run_failed": {
+      const error = p.error as string | undefined;
+      return { title: "El pipeline encontró un error", sub: error ? truncate(error, 80) : undefined, state: "error" };
+    }
+    default: return null;
+  }
+}
 
 const STATUS_BADGE: Record<string, { label: string; cls: string }> = {
   queued:        { label: "En cola",      cls: "badge--queued"  },
@@ -62,18 +178,6 @@ function extractJiraKey(v: string): string {
   return m ? m[1].toUpperCase() : v.trim();
 }
 
-function labelFor(type: string): string {
-  return EVENT_LABEL[type] ?? type.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-function rowClass(type: string): string {
-  if (["run_completed", "review_approved"].includes(type)) return "event-row--success";
-  if (["run_failed", "review_discarded"].includes(type)) return "event-row--error";
-  if (type === "review_required") return "event-row--warning";
-  if (type === "review_feedback") return "event-row--info";
-  if (type === "run_started") return "event-row--live";
-  return "";
-}
 
 function fmtDate(iso: string): string {
   return new Date(iso).toLocaleString("es-CO", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
@@ -152,6 +256,7 @@ export default function App() {
   const [testingJira, setTestingJira] = useState(false);
   const [bootstrapResult, setBootstrapResult] = useState<BootstrapResult | null>(null);
   const [bootstrapping, setBootstrapping] = useState(false);
+  const [runtimeRoot, setRuntimeRoot] = useState("");
 
   // Project view
   const [projectFiles, setProjectFiles] = useState<ContextFileMeta[]>([]);
@@ -170,6 +275,7 @@ export default function App() {
         const res = await bootstrapDesktopBackend();
         if (!alive || !res) return;
         const tok = res.api_token?.trim();
+        if (res.runtime_root) setRuntimeRoot(res.runtime_root);
         if (tok) {
           setToken(tok);
           setBackendOk(true);
@@ -182,7 +288,15 @@ export default function App() {
             if (saved.JIRA_BASE_URL) setJiraBaseUrl(saved.JIRA_BASE_URL);
             if (saved.JIRA_EMAIL) setJiraEmail(saved.JIRA_EMAIL);
             if (saved.JIRA_PROJECT_KEY) setJiraProjectKey(saved.JIRA_PROJECT_KEY);
-          } catch { /* first run, no config yet */ }
+            // First-time user: no API key configured → go straight to Settings
+            const hasKey = saved.ANTHROPIC_API_KEY === "***set***"
+              || saved.GOOGLE_API_KEY === "***set***"
+              || saved.OPENAI_API_KEY === "***set***";
+            if (!hasKey) setView("settings");
+          } catch {
+            // First run — no .env yet, send to Settings
+            setView("settings");
+          }
         }
       } catch (e) {
         if (alive) setError(e instanceof Error ? e.message : "Error iniciando backend");
@@ -630,8 +744,12 @@ export default function App() {
         {/* Event log */}
         <div className="card">
           <div className="card__header">
-            <span className="card__title">Progreso del pipeline</span>
-            <span className="card__label">{events.length} eventos</span>
+            <span className="card__title">Lo que está pasando</span>
+            {pipelineStatus === "running" && (
+              <span style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, color: "var(--accent)", fontWeight: 500 }}>
+                <Loader2 size={12} className="spin" /> En vivo
+              </span>
+            )}
           </div>
           {events.length === 0 ? (
             <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--text-muted)", fontSize: 13, padding: "8px 0" }}>
@@ -639,13 +757,27 @@ export default function App() {
             </div>
           ) : (
             <div className="event-log">
-              {events.map((ev, i) => (
-                <div key={i} className={`event-row ${rowClass(ev.type)}`}>
-                  <span className="event-row__dot" />
-                  <span className="event-row__label">{labelFor(ev.type)}</span>
-                  <span className="event-row__type">{ev.type}</span>
-                </div>
-              ))}
+              {events.map((ev, i) => {
+                const content = getEventContent(ev);
+                if (!content) return null;
+                const isCompleted = ev.type === "run_completed";
+                return (
+                  <div key={i} className={`event-row event-row--${content.state}${isCompleted ? " event-row--completed" : ""}`}>
+                    <div className="event-row__icon">
+                      {content.state === "running" ? <Loader2 size={14} className="spin" /> :
+                       content.state === "done"    ? <Check size={14} /> :
+                       content.state === "warn"    ? <AlertTriangle size={14} /> :
+                       content.state === "error"   ? <XCircle size={14} /> :
+                       content.state === "info"    ? <MessageSquare size={14} /> :
+                       <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--n-400)", display: "inline-block" }} />}
+                    </div>
+                    <div className="event-row__content">
+                      <span className="event-row__title">{content.title}</span>
+                      {content.sub && <span className="event-row__sub">{content.sub}</span>}
+                    </div>
+                  </div>
+                );
+              })}
               <div ref={eventsEndRef} />
             </div>
           )}
@@ -925,7 +1057,7 @@ export default function App() {
               <div className="grid-2">
                 <div className="field">
                   <label className="field__label" htmlFor="provider">Provider</label>
-                  <select id="provider" className="select" value={setupProvider} onChange={(e) => { setSetupProvider(e.target.value as Provider); setShowKeyInput(false); setSetupKey(""); }}>
+                  <select id="provider" className="select" value={setupProvider} onChange={(e) => { const p = e.target.value as Provider; setSetupProvider(p); setSetupModel(PROVIDER_DEFAULT_MODELS[p] ?? ""); setShowKeyInput(false); setSetupKey(""); }}>
                     <option value="google">Google (Gemini)</option>
                     <option value="openai">OpenAI</option>
                     <option value="anthropic">Anthropic (Claude)</option>
@@ -1171,7 +1303,7 @@ export default function App() {
           </div>
 
           {/* Save */}
-          <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+          <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
             <button type="submit" className="btn btn--primary" disabled={savingSetup || restarting}>
               {savingSetup ? <><Loader2 size={14} className="spin" /> Guardando…</> :
                restarting ? <><Loader2 size={14} className="spin" /> Reiniciando backend…</> :
@@ -1179,6 +1311,21 @@ export default function App() {
             </button>
             {setupSaved && !savingSetup && !restarting && (
               <span style={{ color: "var(--success)", fontSize: 13, fontWeight: 600 }}>✓ Configuración guardada</span>
+            )}
+            {runtimeRoot && (
+              <button
+                type="button"
+                className="btn btn--ghost btn--sm"
+                style={{ marginLeft: "auto" }}
+                onClick={async () => {
+                  try {
+                    const { invoke } = await import("@tauri-apps/api/core");
+                    await invoke("open_in_finder", { path: runtimeRoot });
+                  } catch { /* web mode — no-op */ }
+                }}
+              >
+                Abrir perfil en Finder
+              </button>
             )}
           </div>
         </form>

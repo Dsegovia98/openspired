@@ -552,6 +552,15 @@ fn bootstrap_local_backend(app: AppHandle, state: State<BackendState>) -> Result
 }
 
 #[tauri::command]
+fn open_in_finder(path: String) -> Result<(), String> {
+    Command::new("open")
+        .arg(&path)
+        .spawn()
+        .map_err(|e| format!("Cannot open Finder at {path}: {e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
 fn stop_local_backend(state: State<BackendState>) -> Result<(), String> {
     let mut guard = state
         .child
@@ -571,7 +580,8 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             bootstrap_local_backend,
-            stop_local_backend
+            stop_local_backend,
+            open_in_finder
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

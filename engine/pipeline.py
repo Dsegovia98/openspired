@@ -677,6 +677,12 @@ async def run_pipeline(
                     feedback=human_feedback,
                     ticket_draft=final_ticket,
                 )
+                _emit_event(
+                    event_callback,
+                    "feedback_saved",
+                    path="context/.reasoning_bank/human_feedback.md",
+                    message="Feedback guardado. El Escritor lo leerá en futuros tickets para replicar tus preferencias.",
+                )
             except Exception:
                 pass  # best-effort
 
