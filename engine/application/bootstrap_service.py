@@ -209,7 +209,7 @@ def run_bootstrap() -> dict[str, Any]:
     model     = env.get("DEFAULT_MODEL", "gemini-2.5-flash-lite")
 
     # ── Validate config ────────────────────────────────────────────────────────
-    _PLACEHOLDERS = {"TU_EMPRESA", "TU_EMAIL", "your-company", "your@email", ""}
+    _PLACEHOLDERS = {"TU_EMPRESA", "TU_EMAIL", "your-company", "your@email"}
     if not base_url or any(p in base_url for p in _PLACEHOLDERS):
         return _err(
             "JIRA_BASE_URL no configurada",
