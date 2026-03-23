@@ -222,7 +222,10 @@ def resolve_agent_file(relative_path: str | Path, search_dirs: tuple[Path, ...])
 
 def _write_if_missing(path: Path, content: str) -> None:
     if not path.exists():
-        path.write_text(content, encoding="utf-8")
+        try:
+            path.write_text(content, encoding="utf-8")
+        except OSError:
+            pass  # read-only filesystem (e.g. mounted .app bundle) — skip optional placeholder
 
 
 def bootstrap_profile(
@@ -238,7 +241,10 @@ def bootstrap_profile(
     agents_dir = (profile_root / agents_rel).resolve()
 
     ensure_workspace_layout(workspace_dir)
-    agents_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        agents_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass  # read-only filesystem — agents dir lives inside app bundle, skip
 
     profile_toml = profile_root / "profile.toml"
     if not profile_toml.exists():

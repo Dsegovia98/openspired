@@ -1060,7 +1060,35 @@ export default function App() {
                 </div>
                 <div className="field">
                   <label className="field__label" htmlFor="model">Modelo</label>
-                  <input id="model" className="input" value={setupModel} onChange={(e) => setSetupModel(e.target.value)} placeholder="gemini-2.5-flash-lite" />
+                  <input
+                    id="model"
+                    className="input"
+                    value={setupModel}
+                    onChange={(e) => setSetupModel(e.target.value)}
+                    placeholder={PROVIDER_DEFAULT_MODELS[setupProvider] ?? "modelo"}
+                    list="model-suggestions"
+                    autoComplete="off"
+                  />
+                  <datalist id="model-suggestions">
+                    {setupProvider === "google" && <>
+                      <option value="gemini-2.5-flash-lite" />
+                      <option value="gemini-2.5-flash" />
+                      <option value="gemini-2.0-flash" />
+                      <option value="gemini-1.5-pro" />
+                    </>}
+                    {setupProvider === "openai" && <>
+                      <option value="gpt-4o-mini" />
+                      <option value="gpt-4o" />
+                      <option value="gpt-4-turbo" />
+                      <option value="o1-mini" />
+                    </>}
+                    {setupProvider === "anthropic" && <>
+                      <option value="claude-haiku-4-5-20251001" />
+                      <option value="claude-sonnet-4-6" />
+                      <option value="claude-opus-4-6" />
+                    </>}
+                  </datalist>
+                  <span className="field__hint">Puedes escribir cualquier modelo o elegir una sugerencia.</span>
                 </div>
               </div>
 
