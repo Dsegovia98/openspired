@@ -51,6 +51,7 @@ except Exception:
     WORKSPACE_DIR = Path(__file__).resolve().parent.parent.parent / "workspace"
 
 _FEEDBACK_FILE = WORKSPACE_DIR / "context" / ".reasoning_bank" / "human_feedback.md"
+_RULES_FILE    = WORKSPACE_DIR / "context" / ".reasoning_bank" / "feedback_rules.md"
 
 # Maximum feedback entries injected into agent context (older entries are kept
 # in the file for audit purposes but not sent to the LLM to avoid token bloat).
@@ -93,6 +94,22 @@ def save_feedback(
                 "> The Escritor reads the most recent entries to learn your preferences.\n"
             )
             _FEEDBACK_FILE.write_text(header + entry, encoding="utf-8")
+
+
+def load_feedback_rules() -> str:
+    """
+    Load the distilled feedback rules file for agent context injection.
+
+    feedback_rules.md contains structured, actionable rules derived from PO
+    feedback — categorized by violation type with violation counts.
+    Unlike human_feedback.md (raw prose), this file is optimized for LLM
+    instruction: clear rules, no noise.
+
+    Returns empty string if no rules file exists yet.
+    """
+    if not _RULES_FILE.exists():
+        return ""
+    return _RULES_FILE.read_text(encoding="utf-8")
 
 
 def load_recent_feedback(n: int = MAX_FEEDBACK_IN_CONTEXT) -> str:

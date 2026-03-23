@@ -140,6 +140,20 @@ def _recent_feedback() -> Optional[str]:
         return None
 
 
+def _feedback_rules() -> Optional[str]:
+    """
+    Returns distilled, structured rules derived from PO feedback.
+    feedback_rules.md is optimized for LLM instruction: categorized rules
+    with violation counts — unlike raw human_feedback.md prose.
+    """
+    try:
+        from utils.feedback import load_feedback_rules
+        result = load_feedback_rules()
+        return result if result else None
+    except Exception:
+        return None
+
+
 AGENT_CONTEXT: dict[str, list[tuple[str, any]]] = {
 
     "orquestador": [
@@ -199,8 +213,9 @@ AGENT_CONTEXT: dict[str, list[tuple[str, any]]] = {
 
     "escritor": [
         ("UNIVERSAL RULES",          _w("context/global.md")),
-        ("ANTI-PATTERNS",            _w("context/.reasoning_bank/anti_patrones.md")),   # moved up: PO corrections take priority
-        ("HUMAN FEEDBACK",           _recent_feedback),         # moved up: PO voice before product context
+        ("FEEDBACK RULES",           _feedback_rules),          # distilled PO rules — highest priority after global
+        ("ANTI-PATTERNS",            _w("context/.reasoning_bank/anti_patrones.md")),
+        ("HUMAN FEEDBACK",           _recent_feedback),         # raw PO corrections (recent N entries)
         ("SPRINT CONTEXT",           _w("context/sprint_context.md")),
         ("PRODUCT KNOWLEDGE",        _w("context/product_knowledge.md")),
         ("PRODUCT GUIDE",            _product_guide),          # CDP Layer 2: master guide
@@ -218,8 +233,9 @@ AGENT_CONTEXT: dict[str, list[tuple[str, any]]] = {
 
     "qa": [
         ("UNIVERSAL RULES",          _w("context/global.md")),
-        ("SUCCESSFUL PATTERNS",      _w("context/.reasoning_bank/patrones_exitosos.md")),
+        ("FEEDBACK RULES",           _feedback_rules),          # distilled PO rules — QA must enforce these
         ("ANTI-PATTERNS",            _w("context/.reasoning_bank/anti_patrones.md")),
+        ("SUCCESSFUL PATTERNS",      _w("context/.reasoning_bank/patrones_exitosos.md")),
         ("AGENT DEFINITION",         _a("06_QA/06_QA.md")),
         ("SKILL: TECHNICAL TESTS",   _a("06_QA/Skills/01_Skill_Pruebas_Tecnicas.md")),
         ("SKILL: ROLE VALIDATION",   _a("06_QA/Skills/02_Skill_Validacion_Roles_QA.md")),

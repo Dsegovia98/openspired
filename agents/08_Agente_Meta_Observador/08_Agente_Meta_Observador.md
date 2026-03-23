@@ -18,6 +18,7 @@
 2. **Execute (3 funciones):**
    - **Auditoría Metacognitiva:** Registra qué salió bien (IA-IA), qué falló (IA-IA), y qué corrigió el humano (IA-Humano). Escribe en `workspace/context/.meta_insights/`.
    - **Trayectorias y Destilación:** Puntúa el resultado (Score Alto/Medio/Bajo según feedback PO). Si Score Alto → extrae el patrón exitoso y lo guarda en `workspace/context/.reasoning_bank/patrones_exitosos.md`. Si Score Bajo → extrae el anti-patrón y lo guarda en `workspace/context/.reasoning_bank/anti_patrones.md`. Verifica que el nuevo patrón no contradiga uno existente (Anti-Forgetting); si lo hace, lo marca en `conflictos_pendientes.md`.
+   - **Síntesis de Reglas de Feedback:** Si el PO dio feedback en esta sesión, actualiza `workspace/context/.reasoning_bank/feedback_rules.md`. Cada regla debe tener: nombre corto, conteo de violaciones (incrementar si ya existía), evidencia (ticket IDs + cita directa del PO), y alcance. Las reglas con 2+ violaciones son CRÍTICAS. Las nuevas reglas se agregan; las existentes se actualizan con el nuevo conteo y evidencia.
    - **Extracción de Memoria:** Detecta hechos nuevos de la ejecución (ej: nuevo módulo, nueva relación de dependencia) y los inyecta en `workspace/context/product_knowledge.md` o `workspace/context/relationships.md` según corresponda. Respeta el scoping (Global vs Sprint).
 3. **Validate:** Verifica coherencia interna del ReasoningBank (no hay conflictos sin resolver) y que la Memoria está actualizada.
 ## Input → Output:
@@ -26,5 +27,6 @@
   - Auditorías en `workspace/context/.meta_insights/audit_log_[ID].md`
   - Patrones en `workspace/context/.reasoning_bank/patrones_exitosos.md`
   - Anti-patrones en `workspace/context/.reasoning_bank/anti_patrones.md`
+  - Reglas destiladas en `workspace/context/.reasoning_bank/feedback_rules.md`
   - Hechos nuevos en `workspace/context/`
   - Propuestas de mejora (System Upgrade Proposals) al PO cuando se le solicite.

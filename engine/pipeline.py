@@ -197,12 +197,23 @@ DOCUMENTO CONCEPTUAL (referencia de lógica):
 TICKET A REVISAR:
 {ticket_draft}
 
-Tu tarea:
-{"Para USER STORY: (1) Verifica que cada AC sea medible y observable — sin criterios vagos. (2) Si faltan ACs de cobertura BASIC/FULL, agrégalos (máx. 6 en total). (3) Selecciona los 2-3 flujos de mayor riesgo y escríbelos/corrígelos en CRITICAL FLOWS usando este formato exacto de una línea por flujo: '* [Tipo]: estado inicial → acción → resultado esperado' (tipos válidos: Happy path, Error, Role restriction). (4) Produce el ticket completo con tus correcciones, EN primero, separador ════════════════════════════════ ESPAÑOL ════════════════════════════════, luego ES espejo exacto." if ticket_type == "User Story" else "Para DESIGN TASK: valida que los criterios de entrega visual sean concretos (estados vacío/error/estándar definidos, restricciones de rol coherentes). NO agregues flujos de prueba ni validaciones de backend. Produce el ticket corregido si hay cambios."}
+PASO 1 — COMPLIANCE CHECK (obligatorio antes de cualquier corrección):
+Revisa el ticket línea por línea buscando estas violaciones conocidas. Si encuentras CUALQUIERA, es un QA_ISSUE:
+1. ¿Hay mención de skeleton loaders, spinners, estados de carga? → VIOLACIÓN (no se especifican a menos que el PO lo pida)
+2. ¿Hay mención de APIs, endpoints, llamadas HTTP, "si la API falla", "el endpoint retorna"? → VIOLACIÓN
+3. ¿Los ACs mencionan "usuario BASIC" o "usuario FULL"? → VIOLACIÓN (roles SOLO en sección RESTRICTIONS)
+4. ¿Hay una sección llamada CRITICAL FLOWS? → VIOLACIÓN (esta sección fue eliminada del estándar)
+5. ¿Hay mensajes de error inventados específicos no mencionados en el input? → VIOLACIÓN
+6. ¿Los ACs describen cómo funciona el módulo BASE en lugar del cambio nuevo? → VIOLACIÓN (ACs son de delta, no de baseline)
+7. ¿Hay más de 6 criterios de aceptación? → VIOLACIÓN
 
-PROHIBIDO: {{panel}}, {{color}}, markdown headers (##), emojis. Mantén el formato de texto plano existente con separadores de guiones bajos y secciones en MAYÚSCULAS.
-Si el ticket está correcto, escribe EXACTAMENTE: "QA_PASS" en la primera línea, seguido del ticket (con tus mejoras si aplica).
-Si hay issues, escribe "QA_ISSUES:" seguido de la lista de problemas específicos, y luego el ticket corregido."""
+PASO 2 — VALIDACIÓN DE CONTENIDO:
+{"Para USER STORY: (1) Verifica que cada AC sea medible y observable — sin criterios vagos. (2) Verifica que los ACs describen SOLO el comportamiento nuevo/modificado (no el módulo base existente). (3) Verifica que la sección RESTRICTIONS FOR A USER WITH THE BASIC ROLE existe si hay restricciones de rol. (4) Verifica que el bloque EN y ES son espejo exacto en estructura. Produce el ticket completo con tus correcciones, EN primero, separador ════════════════════════════════ ESPAÑOL ════════════════════════════════, luego ES espejo exacto." if ticket_type == "User Story" else "Para DESIGN TASK: valida que los criterios de entrega visual sean concretos (estados vacío/error/estándar definidos, restricciones de rol coherentes). NO agregues flujos de prueba ni validaciones de backend. Produce el ticket corregido si hay cambios."}
+
+PROHIBIDO agregar contenido nuevo no presente en el DOCUMENTO CONCEPTUAL. Tu rol es validar y corregir, no inventar.
+PROHIBIDO: {{panel}}, {{color}}, markdown headers (##), emojis, sección CRITICAL FLOWS. Mantén el formato de texto plano existente con separadores de guiones bajos y secciones en MAYÚSCULAS.
+Si el ticket pasa todos los checks, escribe EXACTAMENTE: "QA_PASS" en la primera línea, seguido del ticket (con tus correcciones si aplica).
+Si hay issues, escribe "QA_ISSUES:" seguido de la lista de problemas específicos (referenciando el número de violación del Paso 1 si aplica), y luego el ticket corregido."""
 
 
 def _feedback_prompt(ticket_draft: str, revision_num: int) -> str:
