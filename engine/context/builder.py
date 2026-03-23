@@ -199,15 +199,15 @@ AGENT_CONTEXT: dict[str, list[tuple[str, any]]] = {
 
     "escritor": [
         ("UNIVERSAL RULES",          _w("context/global.md")),
+        ("ANTI-PATTERNS",            _w("context/.reasoning_bank/anti_patrones.md")),   # moved up: PO corrections take priority
+        ("HUMAN FEEDBACK",           _recent_feedback),         # moved up: PO voice before product context
         ("SPRINT CONTEXT",           _w("context/sprint_context.md")),
         ("PRODUCT KNOWLEDGE",        _w("context/product_knowledge.md")),
         ("PRODUCT GUIDE",            _product_guide),          # CDP Layer 2: master guide
         ("INTERFACE MAP",            _w("context/interface_map.md")),
         ("TICKET TEMPLATE",          _w("context/ticket_template.md")),
         ("ENTITY RELATIONSHIPS",     _w("context/relationships.md")),
-        ("HUMAN FEEDBACK",           _recent_feedback),         # last N entries only
         ("SUCCESSFUL PATTERNS",      _w("context/.reasoning_bank/patrones_exitosos.md")),
-        ("ANTI-PATTERNS",            _w("context/.reasoning_bank/anti_patrones.md")),
         ("PRD INDEX",                _w("context/decisiones_prd.md")),
         ("AGENT DEFINITION",         _a("05_Escritor_USs/05_Escritor_USs.md")),
         ("SKILL: JIRA FORMAT",       _a("05_Escritor_USs/Skills/01_Skill_Traduccion_Jira_Markup.md")),
