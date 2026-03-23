@@ -828,6 +828,100 @@ body {
   color: var(--success);
 }
 
+/* ── Project context file list ─────────────────────────────────────────────── */
+.project-file-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.project-file {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  transition: border-color 150ms;
+}
+
+.project-file--open {
+  border-color: var(--accent);
+}
+
+.project-file__header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--s-4) var(--s-5);
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  gap: var(--s-4);
+  transition: background 150ms;
+}
+
+.project-file__header:hover {
+  background: var(--surface-2);
+}
+
+.project-file__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.project-file__name {
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.project-file__desc {
+  font-size: 12px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.project-file__body {
+  border-top: 1px solid var(--border);
+}
+
+.project-file__editor {
+  display: block;
+  width: 100%;
+  min-height: 280px;
+  max-height: 520px;
+  padding: var(--s-4) var(--s-5);
+  background: var(--surface-2);
+  border: none;
+  resize: vertical;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--text);
+  outline: none;
+  box-sizing: border-box;
+}
+
+.project-file__editor[readonly] {
+  color: var(--fg-muted);
+  cursor: default;
+}
+
+.project-file__footer {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-3) var(--s-5);
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
 /* ── Utility ───────────────────────────────────────────────────────────────── */
 .text-muted { color: var(--text-muted); font-size: 13px; }
 .text-mono { font-family: var(--font-mono); }

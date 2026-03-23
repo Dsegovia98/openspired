@@ -18,6 +18,26 @@ export type IdeaItem = {
 };
 export type Provider = "google" | "openai" | "anthropic";
 
+export type ContextFileMeta = {
+  key: string;
+  label: string;
+  description: string;
+  filename: string;
+  editable: boolean;
+  exists: boolean;
+  size: number;
+};
+
+export type BootstrapResult = {
+  ok: boolean;
+  tickets_fetched: number;
+  style_samples: number;
+  files_updated: string[];
+  summary: string;
+  error?: string;
+  hint?: string;
+};
+
 export type SetupPayload = {
   provider: Provider;
   default_model: string;

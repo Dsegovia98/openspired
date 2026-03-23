@@ -1,11 +1,11 @@
-import { Eye, EyeOff, History, Lightbulb, Loader2, Play, Plus, Settings, UserCheck, Zap } from "lucide-react";
+import { BookOpen, ChevronDown, ChevronRight, Eye, EyeOff, History, Lightbulb, Loader2, Play, Plus, Settings, UserCheck, Zap } from "lucide-react";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import logoUrl from "/logo.png";
-import { apiGet, apiPost, applySetup, createRun, IdeaItem, Provider, RunMode, SetupPayload, streamRunEvents, TicketTypeHint } from "./api/client";
+import { apiGet, apiPost, applySetup, BootstrapResult, ContextFileMeta, createRun, IdeaItem, Provider, RunMode, SetupPayload, streamRunEvents, TicketTypeHint } from "./api/client";
 import { bootstrapDesktopBackend, restartDesktopBackend } from "./desktop/bootstrap";
 
 // ── Types ──────────────────────────────────────────────────────────────────
-type View = "create" | "pipeline" | "history" | "ideas" | "settings";
+type View = "create" | "pipeline" | "history" | "ideas" | "project" | "settings";
 
 type RunSummary = {
   run_id: string;
@@ -150,6 +150,16 @@ export default function App() {
   const [setupSaved, setSetupSaved] = useState(false);
   const [jiraTestResult, setJiraTestResult] = useState<Record<string, unknown> | null>(null);
   const [testingJira, setTestingJira] = useState(false);
+  const [bootstrapResult, setBootstrapResult] = useState<BootstrapResult | null>(null);
+  const [bootstrapping, setBootstrapping] = useState(false);
+
+  // Project view
+  const [projectFiles, setProjectFiles] = useState<ContextFileMeta[]>([]);
+  const [loadingProjectFiles, setLoadingProjectFiles] = useState(false);
+  const [openFileKey, setOpenFileKey] = useState<string | null>(null);
+  const [fileContent, setFileContent] = useState<Record<string, string>>({});
+  const [savingFile, setSavingFile] = useState<string | null>(null);
+  const [fileSaved, setFileSaved] = useState<string | null>(null);
 
   // ── Bootstrap ────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -319,6 +329,45 @@ export default function App() {
     finally { setSavingSetup(false); }
   }
 
+  async function runJiraBootstrap() {
+    setBootstrapping(true); setBootstrapResult(null);
+    try {
+      const result = await apiPost<BootstrapResult>("/jira/bootstrap", token, {});
+      setBootstrapResult(result);
+      // Refresh project files list if bootstrap succeeded
+      if (result.ok) loadProjectFiles();
+    } catch (e) {
+      setBootstrapResult({ ok: false, tickets_fetched: 0, style_samples: 0, files_updated: [],
+        summary: "", error: e instanceof Error ? e.message : "Error inesperado", hint: "" });
+    } finally { setBootstrapping(false); }
+  }
+
+  async function loadProjectFiles() {
+    setLoadingProjectFiles(true);
+    try {
+      const res = await apiGet<{ files: ContextFileMeta[] }>("/project/files", token);
+      setProjectFiles(res.files);
+    } catch { /**/ } finally { setLoadingProjectFiles(false); }
+  }
+
+  async function loadFileContent(key: string) {
+    if (fileContent[key] !== undefined) return;
+    try {
+      const res = await apiGet<{ content: string }>(`/project/files/${key}`, token);
+      setFileContent(prev => ({ ...prev, [key]: res.content }));
+    } catch { /**/ }
+  }
+
+  async function saveFile(key: string) {
+    setSavingFile(key);
+    try {
+      await apiPost(`/project/files/${key}`, token, { content: fileContent[key] ?? "" });
+      setFileSaved(key);
+      setTimeout(() => setFileSaved(null), 2500);
+    } catch (e) { setError(e instanceof Error ? e.message : "Error guardando archivo"); }
+    finally { setSavingFile(null); }
+  }
+
   async function testJiraConnection(issueKey = "") {
     setTestingJira(true); setJiraTestResult(null);
     try {
@@ -367,6 +416,11 @@ export default function App() {
           <li>
             <button className={`nav__item${view === "history" ? " nav__item--active" : ""}`} onClick={() => setView("history")}>
               <History size={16} /> <span>Historial</span>
+            </button>
+          </li>
+          <li>
+            <button className={`nav__item${view === "project" ? " nav__item--active" : ""}`} onClick={() => { setView("project"); loadProjectFiles(); }}>
+              <BookOpen size={16} /> <span>Proyecto</span>
             </button>
           </li>
         </ul>
@@ -1047,6 +1101,72 @@ export default function App() {
                   )}
                 </div>
               )}
+
+              {/* Bootstrap from Jira */}
+              {jiraConfigured && (
+                <div style={{ marginTop: 20, paddingTop: 16, borderTop: "1px solid var(--border)" }}>
+                  <div style={{ marginBottom: 8 }}>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text)" }}>Importar contexto desde Jira</span>
+                    <p style={{ fontSize: 12, color: "var(--fg-muted)", marginTop: 4, lineHeight: 1.5 }}>
+                      Analiza el historial de tickets completados con IA para generar contexto de producto, equipo, módulos
+                      y patrones de escritura. El pipeline los usará desde el próximo ticket generado.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn--primary btn--sm"
+                    onClick={runJiraBootstrap}
+                    disabled={bootstrapping}
+                  >
+                    {bootstrapping
+                      ? <><Loader2 size={13} className="spin" /> Analizando tickets… (puede tardar ~30 seg)</>
+                      : "Generar contexto desde historial de Jira"}
+                  </button>
+                  {bootstrapResult && (
+                    <div style={{
+                      marginTop: 12,
+                      borderRadius: 8,
+                      padding: "12px 16px",
+                      fontSize: 12,
+                      background: bootstrapResult.ok ? "oklch(97% 0.02 155)" : "oklch(97% 0.02 28)",
+                      border: `1px solid ${bootstrapResult.ok ? "oklch(80% 0.08 155)" : "oklch(80% 0.08 28)"}`,
+                    }}>
+                      {bootstrapResult.ok ? (
+                        <>
+                          <div style={{ color: "var(--success)", fontWeight: 600, marginBottom: 6 }}>
+                            ✓ Contexto generado correctamente
+                          </div>
+                          <div style={{ color: "var(--fg-muted)", lineHeight: 1.6 }}>
+                            {bootstrapResult.summary}
+                          </div>
+                          <div style={{ marginTop: 8, display: "flex", gap: 16 }}>
+                            <span style={{ color: "var(--text)", fontWeight: 600 }}>
+                              {bootstrapResult.tickets_fetched} tickets analizados
+                            </span>
+                            <span style={{ color: "var(--fg-muted)" }}>
+                              {bootstrapResult.style_samples} con descripción completa
+                            </span>
+                          </div>
+                          <div style={{ marginTop: 6, color: "var(--fg-muted)" }}>
+                            Archivos actualizados: {bootstrapResult.files_updated.join(" · ")}
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div style={{ color: "var(--error)", fontWeight: 600, marginBottom: 4 }}>
+                            ✗ {bootstrapResult.error}
+                          </div>
+                          {bootstrapResult.hint && (
+                            <div style={{ color: "var(--fg-muted)", lineHeight: 1.5 }}>
+                              💡 {bootstrapResult.hint}
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
 
@@ -1062,6 +1182,117 @@ export default function App() {
             )}
           </div>
         </form>
+      </div>
+    );
+  }
+
+  // ── Render: Project ──────────────────────────────────────────────────────
+  function ProjectView() {
+    const FILE_DESCRIPTIONS: Record<string, string> = {
+      product_knowledge: "Lo leen todos los agentes antes de generar cada ticket.",
+      global: "Reglas de plataforma, roles y formato. Se aplica en cada corrida.",
+      sprint_context: "Sprint actual y épicas activas. Actualizar al inicio de cada sprint.",
+      team: "Directorio de personas y roles para asignación automática.",
+      ticket_template: "Estructura base del Escritor. Puede importarse desde Jira.",
+      historical_context: "Módulos, equipo y épicas — generado por el bootstrap de Jira.",
+      successful_patterns: "Estilo de escritura aprendido del historial de Jira.",
+      human_feedback: "Historial de feedback de revisiones (auto-gestionado).",
+    };
+
+    return (
+      <div className="view">
+        <div className="view-header">
+          <h1 className="view-title">Proyecto</h1>
+          <p className="view-subtitle">
+            Archivos de contexto que el pipeline usa en cada corrida. Viven en tu perfil local — nunca en el repositorio.
+          </p>
+        </div>
+
+        {loadingProjectFiles ? (
+          <div className="empty-state">
+            <Loader2 size={20} className="spin" />
+            <p>Cargando archivos…</p>
+          </div>
+        ) : projectFiles.length === 0 ? (
+          <div className="empty-state">
+            <BookOpen size={32} />
+            <p>No se encontraron archivos de contexto.</p>
+            <button className="btn btn--ghost btn--sm" onClick={loadProjectFiles}>Reintentar</button>
+          </div>
+        ) : (
+          <div className="project-file-list">
+            {projectFiles.map(file => {
+              const isOpen = openFileKey === file.key;
+              const content = fileContent[file.key] ?? "";
+              const isSaving = savingFile === file.key;
+              const saved = fileSaved === file.key;
+
+              return (
+                <div key={file.key} className={`project-file${isOpen ? " project-file--open" : ""}`}>
+                  <button
+                    className="project-file__header"
+                    onClick={() => {
+                      if (isOpen) {
+                        setOpenFileKey(null);
+                      } else {
+                        setOpenFileKey(file.key);
+                        loadFileContent(file.key);
+                      }
+                    }}
+                  >
+                    <div className="project-file__meta">
+                      <span className="project-file__name">{file.label}</span>
+                      <span className="project-file__desc">{FILE_DESCRIPTIONS[file.key] ?? file.description}</span>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                      {!file.exists && (
+                        <span className="badge badge--muted" style={{ fontSize: 11 }}>vacío</span>
+                      )}
+                      {!file.editable && (
+                        <span className="badge badge--muted" style={{ fontSize: 11 }}>auto</span>
+                      )}
+                      {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                    </div>
+                  </button>
+
+                  {isOpen && (
+                    <div className="project-file__body">
+                      {fileContent[file.key] === undefined ? (
+                        <div style={{ padding: "24px", textAlign: "center", color: "var(--fg-muted)" }}>
+                          <Loader2 size={16} className="spin" />
+                        </div>
+                      ) : (
+                        <>
+                          <textarea
+                            className="project-file__editor"
+                            value={content}
+                            readOnly={!file.editable}
+                            onChange={e => setFileContent(prev => ({ ...prev, [file.key]: e.target.value }))}
+                            spellCheck={false}
+                          />
+                          {file.editable && (
+                            <div className="project-file__footer">
+                              <button
+                                className="btn btn--primary btn--sm"
+                                onClick={() => saveFile(file.key)}
+                                disabled={isSaving}
+                              >
+                                {isSaving ? <><Loader2 size={13} className="spin" /> Guardando…</> : "Guardar"}
+                              </button>
+                              {saved && (
+                                <span style={{ fontSize: 12, color: "var(--success)", fontWeight: 600 }}>✓ Guardado</span>
+                              )}
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     );
   }
@@ -1083,6 +1314,7 @@ export default function App() {
         {view === "pipeline" && PipelineView()}
         {view === "ideas" && IdeasView()}
         {view === "history" && HistoryView()}
+        {view === "project" && ProjectView()}
         {view === "settings" && SettingsView()}
       </main>
     </div>

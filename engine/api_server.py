@@ -12,9 +12,11 @@ from pydantic import BaseModel, Field, model_validator
 
 import config
 from application.artifacts_service import get_ticket_history, list_artifacts
+from application.bootstrap_service import BootstrapError, run_bootstrap
 from application.config_service import get_config_status
 from application.ideas_service import capture_idea, list_ideas
 from application.models import ReviewAction, RunRequest
+from application.project_service import get_context_file, list_context_files, save_context_file
 from application.run_manager import InvalidRunStateError, RunManager, RunNotFoundError
 from application.setup_service import apply_setup
 from utils.jira_client import JiraClient, JiraAPIError
@@ -361,6 +363,43 @@ def create_app(
 
         result["ok"] = result.get("myself", {}).get("ok", False)
         return result
+
+    # ── Project context files ────────────────────────────────────────────────
+
+    @app.get("/project/files")
+    def project_files():
+        return {"files": list_context_files()}
+
+    @app.get("/project/files/{key}")
+    def project_file(key: str):
+        try:
+            return get_context_file(key)
+        except KeyError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+
+    @app.post("/project/files/{key}")
+    async def project_file_save(key: str, request: Request):
+        body = await request.json()
+        content = body.get("content", "")
+        try:
+            return save_context_file(key, content)
+        except KeyError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        except PermissionError as e:
+            raise HTTPException(status_code=403, detail=str(e))
+
+    # ── Jira bootstrap ───────────────────────────────────────────────────────
+
+    @app.post("/jira/bootstrap")
+    def jira_bootstrap():
+        try:
+            return run_bootstrap()
+        except BootstrapError as e:
+            return {"ok": False, "error": str(e), "hint": e.hint,
+                    "tickets_fetched": 0, "style_samples": 0, "files_updated": []}
+        except Exception as e:
+            return {"ok": False, "error": str(e), "hint": "",
+                    "tickets_fetched": 0, "style_samples": 0, "files_updated": []}
 
     @app.get("/ideas")
     def get_ideas(limit: int = 50):
