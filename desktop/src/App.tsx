@@ -7,6 +7,18 @@ import { bootstrapDesktopBackend, restartDesktopBackend } from "./desktop/bootst
 // ── Types ──────────────────────────────────────────────────────────────────
 type View = "create" | "pipeline" | "history" | "ideas" | "project" | "settings";
 
+type TicketRecord = {
+  ticket_id: string;
+  ticket_type: string;
+  domain: string;
+  module: string;
+  title: string;
+  date: string;
+  file_path: string;
+  cost_usd?: number;
+  revisions?: number;
+};
+
 type RunSummary = {
   run_id: string;
   status: string;
@@ -187,10 +199,6 @@ function truncate(s: string, n = 52): string {
   return s.length > n ? s.slice(0, n) + "…" : s;
 }
 
-function runTitle(r: RunSummary): string {
-  if (r.request.mode === "jira") return r.request.jira_issue_key || "Jira run";
-  return truncate(r.request.input_text || "Run manual");
-}
 
 // ── App ────────────────────────────────────────────────────────────────────
 export default function App() {
@@ -221,9 +229,8 @@ export default function App() {
   const eventsEndRef = useRef<HTMLDivElement>(null);
 
   // History
-  const [runs, setRuns] = useState<RunSummary[]>([]);
-  const [loadingRuns, setLoadingRuns] = useState(false);
-  const [expandedRun, setExpandedRun] = useState<string | null>(null);
+  const [tickets, setTickets] = useState<TicketRecord[]>([]);
+  const [loadingTickets, setLoadingTickets] = useState(false);
 
   // Ideas
   const [ideas, setIdeas] = useState<IdeaItem[]>([]);
@@ -344,7 +351,7 @@ export default function App() {
 
   // ── History load ─────────────────────────────────────────────────────────
   useEffect(() => {
-    if (view === "history" && token) loadRuns();
+    if (view === "history" && token) loadTickets();
   }, [view, token]);
 
   // ── Ideas load ───────────────────────────────────────────────────────────
@@ -353,10 +360,10 @@ export default function App() {
   }, [view, token]);
 
   // ── Handlers ─────────────────────────────────────────────────────────────
-  async function loadRuns() {
-    setLoadingRuns(true);
-    try { const d = await apiGet<{ items: RunSummary[] }>("/runs?limit=50", token); setRuns(d.items ?? []); }
-    catch { /**/ } finally { setLoadingRuns(false); }
+  async function loadTickets() {
+    setLoadingTickets(true);
+    try { const d = await apiGet<{ items: TicketRecord[] }>("/artifacts?limit=200", token); setTickets((d.items ?? []).slice().reverse()); }
+    catch { /**/ } finally { setLoadingTickets(false); }
   }
 
   async function loadIdeas() {
@@ -825,59 +832,47 @@ export default function App() {
       <div className="view">
         <div className="view-header">
           <h1 className="view-title">Historial</h1>
-          <p className="view-subtitle">Todos los runs ejecutados en esta workspace.</p>
+          <p className="view-subtitle">Tickets aprobados generados por el pipeline.</p>
         </div>
 
         <div style={{ display: "flex", justifyContent: "flex-end" }}>
-          <button className="btn btn--ghost btn--sm" onClick={loadRuns} disabled={loadingRuns}>
-            {loadingRuns ? <Loader2 size={14} className="spin" /> : "Actualizar"}
+          <button className="btn btn--ghost btn--sm" onClick={loadTickets} disabled={loadingTickets}>
+            {loadingTickets ? <Loader2 size={14} className="spin" /> : "Actualizar"}
           </button>
         </div>
 
-        {loadingRuns && runs.length === 0 && (
+        {loadingTickets && tickets.length === 0 && (
           <div className="empty-state"><Loader2 size={22} className="spin" /><p>Cargando historial…</p></div>
         )}
 
-        {!loadingRuns && runs.length === 0 && (
+        {!loadingTickets && tickets.length === 0 && (
           <div className="empty-state">
             <div className="empty-state__icon"><History size={22} /></div>
-            <h3>Sin historial aún</h3>
-            <p>Los runs aparecerán aquí después del primer pipeline.</p>
+            <h3>Sin tickets aún</h3>
+            <p>Los tickets aprobados aparecerán aquí después del primer pipeline.</p>
           </div>
         )}
 
-        {runs.length > 0 && (
+        {tickets.length > 0 && (
           <div className="run-list">
-            {runs.map((r) => {
-              const badge = STATUS_BADGE[r.status] ?? { label: r.status, cls: "badge--muted" };
-              const expanded = expandedRun === r.run_id;
+            {tickets.map((t) => {
+              const isUS = t.ticket_type.toLowerCase().includes("user story");
               return (
-                <div key={r.run_id}>
-                  <div
-                    className={`run-row${expanded ? " run-row--expanded" : ""}`}
-                    onClick={() => setExpandedRun(expanded ? null : r.run_id)}
-                  >
-                    <div>
-                      <div className="run-row__title">{runTitle(r)}</div>
-                      <div className="run-row__sub">{r.run_id}</div>
-                    </div>
-                    <span className="badge badge--muted" style={{ fontSize: 11 }}>{r.request.mode}</span>
-                    {r.result?.cost_usd != null && (
-                      <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: "var(--text-muted)" }}>
-                        ${Number(r.result.cost_usd).toFixed(4)}
-                      </span>
-                    )}
-                    <span className={`badge ${badge.cls}`}>{badge.label}</span>
-                    <span className="run-row__date">{fmtDate(r.created_at)}</span>
+                <div key={t.ticket_id} className="run-row">
+                  <span className={`badge ${isUS ? "badge--running" : "badge--info"}`} style={{ fontSize: 10, flexShrink: 0 }}>
+                    {isUS ? "US" : "DT"}
+                  </span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div className="run-row__title">{t.title}</div>
+                    <div className="run-row__sub">{t.ticket_id} · {t.module}</div>
                   </div>
-                  {expanded && (
-                    <div className="run-detail">
-                      {r.error && (
-                        <p style={{ color: "var(--error)", fontSize: 12, marginBottom: 8 }}>Error: {r.error}</p>
-                      )}
-                      <pre>{JSON.stringify(r.result && Object.keys(r.result).length ? r.result : { events: r.events_count, status: r.status }, null, 2)}</pre>
-                    </div>
+                  <span className="badge badge--muted" style={{ fontSize: 10, flexShrink: 0 }}>{t.domain}</span>
+                  {t.cost_usd != null && t.cost_usd > 0 && (
+                    <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: "var(--text-muted)", flexShrink: 0 }}>
+                      ${t.cost_usd.toFixed(4)}
+                    </span>
                   )}
+                  <span className="run-row__date" style={{ flexShrink: 0 }}>{t.date}</span>
                 </div>
               );
             })}
